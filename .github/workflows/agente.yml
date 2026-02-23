@@ -1,0 +1,127 @@
+name: Agente Claude Code
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt refinado para Claude Code"
+        required: true
+      repo_objetivo:
+        description: "Repositorio objetivo (owner/nombre)"
+        required: true
+      rama_base:
+        description: "Rama base del repositorio objetivo"
+        default: "main"
+        required: false
+      chat_id:
+        description: "Telegram chat ID para notificación de vuelta"
+        required: true
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repositorio objetivo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.repo_objetivo }}
+          token: ${{ secrets.GH_PAT }}
+          ref: ${{ github.event.inputs.rama_base }}
+
+      - name: Configurar Git
+        run: |
+          git config user.name "Claude Code Agent"
+          git config user.email "agent@claude-code.bot"
+
+      - name: Crear rama de agente
+        id: branch
+        run: |
+          BRANCH="agent/$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Ejecutar Claude Code
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_PROMPT: ${{ github.event.inputs.prompt }}
+        run: claude --print --dangerously-skip-permissions "$CLAUDE_PROMPT"
+
+      - name: Commit cambios
+        id: commit
+        env:
+          CLAUDE_PROMPT: ${{ github.event.inputs.prompt }}
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Claude Code no realizó cambios en el árbol de ficheros."
+          else
+            TITLE=$(printf '%s' "$CLAUDE_PROMPT" | head -c 72)
+            git commit -m "feat: ${TITLE}" \
+                       -m "" \
+                       -m "Generado automáticamente por Claude Code Agent."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push rama
+        if: steps.commit.outputs.changed == 'true'
+        run: git push origin ${{ steps.branch.outputs.branch }}
+
+      - name: Crear Pull Request
+        id: pr
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLAUDE_PROMPT: ${{ github.event.inputs.prompt }}
+        run: |
+          BODY=$(cat <<'PREOF'
+## Cambios generados por Claude Code Agent
+
+**Prompt ejecutado:**
+
+```
+PREOF
+          BODY="${BODY}
+${CLAUDE_PROMPT}
+\`\`\`
+
+---
+*PR creado automáticamente por el Mobile Coding Agent.*"
+
+          PR_URL=$(gh pr create \
+            --repo "${{ github.event.inputs.repo_objetivo }}" \
+            --base "${{ github.event.inputs.rama_base }}" \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "feat: agente Claude Code" \
+            --body "$BODY" \
+          )
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Notificar PR a Telegram
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${{ github.event.inputs.chat_id }}" \
+            --data-urlencode "text=✅ PR listo: ${{ steps.pr.outputs.pr_url }}"
+
+      - name: Notificar sin cambios a Telegram
+        if: steps.commit.outputs.changed == 'false'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${{ github.event.inputs.chat_id }}" \
+            --data-urlencode "text=ℹ️ Claude Code no realizó ningún cambio en el repositorio."
