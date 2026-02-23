@@ -83,21 +83,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLAUDE_PROMPT: ${{ github.event.inputs.prompt }}
         run: |
-          BODY="## Cambios generados por Claude Code Agent
-
-**Prompt ejecutado:**
-
-${CLAUDE_PROMPT}
-
----
-*PR creado automáticamente por el Mobile Coding Agent.*"
-
+          printf "## Cambios generados por Claude Code Agent\n\nPrompt ejecutado:\n\n%s\n\n---\nPR creado automaticamente por el Mobile Coding Agent." "$CLAUDE_PROMPT" > /tmp/pr_body.txt
           PR_URL=$(gh pr create \
             --repo "${{ github.event.inputs.repo_objetivo }}" \
             --base "${{ github.event.inputs.rama_base }}" \
             --head "${{ steps.branch.outputs.branch }}" \
             --title "feat: agente Claude Code" \
-            --body "$BODY")
+            --body-file /tmp/pr_body.txt)
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: Notificar PR a Telegram
