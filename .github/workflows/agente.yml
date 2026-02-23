@@ -61,7 +61,8 @@ jobs:
           CLAUDE_PROMPT: ${{ github.event.inputs.prompt }}
         run: |
           git add -A
-          if git diff --staged --quiet; then
+          git status --short
+          if [ -z "$(git status --short)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Claude Code no realizó cambios en el árbol de ficheros."
           else
@@ -92,22 +93,26 @@ jobs:
             --body-file /tmp/pr_body.txt)
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Notificar PR a Telegram
-        if: steps.commit.outputs.changed == 'true'
+      - name: Notificar resultado a Telegram
+        if: always()
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          CHANGED: ${{ steps.commit.outputs.changed }}
         run: |
-          curl -s -X POST \
+          if [ "$CHANGED" = "true" ] && [ -n "$PR_URL" ]; then
+            MSG="PR listo: ${PR_URL}"
+          elif [ "$CHANGED" = "true" ]; then
+            MSG="Rama creada pero no se pudo generar el PR. Revisa: https://github.com/${{ github.event.inputs.repo_objetivo }}/branches"
+          else
+            MSG="Claude Code no realizo cambios en el repositorio."
+          fi
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${{ github.event.inputs.chat_id }}" \
-            --data-urlencode "text=✅ PR listo: ${{ steps.pr.outputs.pr_url }}"
-
-      - name: Notificar sin cambios a Telegram
-        if: steps.commit.outputs.changed == 'false'
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        run: |
-          curl -s -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${{ github.event.inputs.chat_id }}" \
-            --data-urlencode "text=ℹ️ Claude Code no realizó ningún cambio en el repositorio."
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${CHAT_ID}\",\"text\":\"${MSG}\"}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "Telegram HTTP $HTTP_CODE: $BODY"
+          [ "$HTTP_CODE" = "200" ] || exit 1
