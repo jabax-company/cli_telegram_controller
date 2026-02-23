@@ -1,20 +1,26 @@
-# Mobile Coding Agent — Fase 1
+# Mobile Coding Agent - Fase 1
 
 Bot de Telegram que refina ideas de desarrollo con Claude (Haiku) y las ejecuta
-mediante Claude Code CLI en un workflow de GitHub Actions, abriendo un PR automático.
+mediante Claude Code CLI en un workflow de GitHub Actions.
+
+Modo por defecto:
+- iterativo sobre la misma rama
+- PR solo cuando tu lo pides con `/pr`
 
 ## Flujo
 
-```
-Tú (Telegram) → /repo + idea
-      ↓
-  Bot pregunta 2-3 clarificaciones (Haiku, barato)
-      ↓
-  Muestra prompt final + botón ✅ Ejecutar
-      ↓
-  GitHub Actions: checkout → claude --print → commit → PR
-      ↓
-  Bot te manda el link al PR por Telegram
+```text
+Tu (Telegram) -> /repo + idea
+      |
+  Bot pregunta 2-3 clarificaciones (Haiku)
+      |
+  Muestra prompt final + boton Ejecutar
+      |
+  GitHub Actions: checkout -> claude --print -> commit/push en rama activa
+      |
+  Bot envia estado + resumen de cambios por Telegram
+      |
+  Cuando quieras cerrar: /pr + siguiente ejecucion -> abre/reutiliza PR
 ```
 
 ---
@@ -28,7 +34,7 @@ Tú (Telegram) → /repo + idea
 
 ---
 
-## Instalación local
+## Instalacion local
 
 ```bash
 # 1. Clonar y entrar al directorio
@@ -45,12 +51,12 @@ cp .env.example .env
 
 ### Variables en `.env`
 
-| Variable | Descripción |
+| Variable | Descripcion |
 |---|---|
 | `TELEGRAM_TOKEN` | Token del bot (de @BotFather) |
-| `TELEGRAM_USER_ID` | Tu ID numérico de Telegram |
+| `TELEGRAM_USER_ID` | Tu ID numerico de Telegram |
 | `ANTHROPIC_API_KEY` | API key de Anthropic |
-| `ANTHROPIC_MODEL` | Modelo para refinamiento (por defecto: `claude-haiku-4-5-20251001`) |
+| `ANTHROPIC_MODEL` | Modelo para refinamiento (default: `claude-haiku-4-5-20251001`) |
 | `GH_PAT` | GitHub Personal Access Token (permisos: `repo` + `workflow`) |
 | `GITHUB_WORKFLOW_REPO_OWNER` | Tu usuario de GitHub |
 | `GITHUB_WORKFLOW_REPO_NAME` | Nombre de este repo (ej. `claude_code_bot`) |
@@ -59,7 +65,7 @@ cp .env.example .env
 
 ## Secretos en GitHub
 
-Ve a **Settings → Secrets and variables → Actions** de este repo y añade:
+Ve a **Settings -> Secrets and variables -> Actions** de este repo y anade:
 
 | Secret | Valor |
 |---|---|
@@ -67,8 +73,7 @@ Ve a **Settings → Secrets and variables → Actions** de este repo y añade:
 | `ANTHROPIC_API_KEY` | Igual que en `.env` |
 | `GH_PAT` | Igual que en `.env` |
 
-> El `GH_PAT` necesita acceso de escritura al **repo objetivo** (el repo sobre
-> el que Claude va a hacer cambios), no solo a este repo.
+> `GH_PAT` necesita acceso de escritura al repo objetivo (el repo donde Claude hara cambios), no solo a este repo.
 
 ---
 
@@ -82,54 +87,60 @@ python bot.py
 
 ## Uso
 
+```text
+/start              -> Instrucciones
+/repo owner/repo    -> Establece el repositorio objetivo
+<escribe tu idea>   -> Inicia el refinamiento con Haiku
+Ejecutar            -> Dispara el workflow de GitHub Actions
+/rama               -> Ver rama activa
+/rama nueva         -> Reiniciar rama activa
+/pr                 -> La proxima ejecucion abre/reutiliza PR
+/cancelar           -> Resetea la conversacion (mantiene repo configurado)
 ```
-/start              → Instrucciones
-/repo owner/repo    → Establece el repositorio objetivo (persiste hasta que lo cambies)
-<escribe tu idea>   → Inicia el refinamiento con Haiku
-✅ Ejecutar         → Dispara el workflow de GitHub Actions
-/cancelar           → Resetea la conversación (mantiene el repo configurado)
-```
 
-**Ejemplo de sesión:**
+### Ejemplo de sesion iterativa
 
-```
-Tú:   /repo miusuario/mi-api-python
-Bot:  ✅ Repositorio configurado: miusuario/mi-api-python
+```text
+Tu:   /repo miusuario/mi-api-python
+Bot:  Repositorio configurado
 
-Tú:   quiero añadir autenticación con JWT
-Bot:  ¿Los endpoints que hay que proteger son todos, o solo algunos específicos?
+Tu:   quiero anadir autenticacion JWT
+Bot:  (preguntas de clarificacion)
+Bot:  Prompt generado + botones Ejecutar/Cancelar
 
-Tú:   solo /admin y /dashboard
-Bot:  📋 Prompt generado:
-      Añadir autenticación JWT al proyecto...
-      [botones ✅ Ejecutar / ❌ Cancelar]
+Tu:   [click Ejecutar]
+Bot:  Workflow en marcha (rama agent/...)
 
-Tú:   [click ✅ Ejecutar]
-Bot:  🚀 Workflow en marcha. Síguelo aquí: https://github.com/...
+Bot:  Workflow completado. Cambios aplicados en rama agent/...
+      (puedes seguir enviando mas tareas y seguira en la misma rama)
 
-      (2-4 minutos después)
+Tu:   /pr
+Bot:  Cierre con PR activado para la proxima ejecucion
 
-Bot:  ✅ PR listo: https://github.com/miusuario/mi-api-python/pull/7
+Tu:   [click Ejecutar en la siguiente tarea]
+Bot:  PR listo: https://github.com/miusuario/mi-api-python/pull/7
 ```
 
 ---
 
 ## Probar el workflow manualmente
 
-Desde la pestaña **Actions** de este repo → *Agente Claude Code* → **Run workflow**:
+Desde la pestana **Actions** de este repo -> *Agente Claude Code* -> **Run workflow**:
 
-```
-prompt:        Añade un endpoint GET /health que devuelva {"status": "ok"}
-repo_objetivo: owner/nombre-repo
-rama_base:     main
-chat_id:       TU_CHAT_ID_NUMERICO
+```text
+prompt:         Anade un endpoint GET /health que devuelva {"status":"ok"}
+repo_objetivo:  owner/nombre-repo
+rama_base:      main
+chat_id:        TU_CHAT_ID_NUMERICO
+rama_existente: (opcional) agent/20260223-123000
+abrir_pr:       false   # true para cerrar y abrir/reutilizar PR
 ```
 
 ---
 
-## Notas de diseño
+## Notas de diseno
 
-- **Sin base de datos**: el historial de conversación vive en memoria; se pierde al reiniciar el bot. Suficiente para la Fase 1.
-- **Whitelist**: solo responde a `TELEGRAM_USER_ID`. Añadir más usuarios requiere cambiar la función `is_authorized` en `bot.py`.
-- **Rama base**: siempre `main`. Para cambiarla, modifica `RAMA_BASE` en `bot.py`.
-- **Modelo**: Haiku por defecto (barato). Cámbialo con `ANTHROPIC_MODEL` en `.env`.
+- Sin base de datos: el historial vive en memoria y se pierde al reiniciar el bot.
+- Whitelist: solo responde a `TELEGRAM_USER_ID`.
+- Rama base: `main` por defecto (`RAMA_BASE` en `bot.py`).
+- Modelo: Haiku por defecto (`ANTHROPIC_MODEL` en `.env`).

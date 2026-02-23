@@ -16,6 +16,14 @@ on:
       chat_id:
         description: "Telegram chat ID para notificación de vuelta"
         required: true
+      rama_existente:
+        description: "Continuar en esta rama (dejar vacío para crear nueva)"
+        required: false
+        default: ""
+      abrir_pr:
+        description: "Abrir/reutilizar PR al final (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   run-agent:
@@ -28,18 +36,70 @@ jobs:
           repository: ${{ github.event.inputs.repo_objetivo }}
           token: ${{ secrets.GH_PAT }}
           ref: ${{ github.event.inputs.rama_base }}
+          fetch-depth: 0
 
       - name: Configurar Git
         run: |
           git config user.name "Claude Code Agent"
           git config user.email "agent@claude-code.bot"
 
-      - name: Crear rama de agente
+      - name: Preparar endpoint Telegram
+        id: telegram
+        env:
+          TELEGRAM_TOKEN_RAW: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          RAW="$(printf '%s' "${TELEGRAM_TOKEN_RAW}" | tr -d '\r\n')"
+          TOKEN="$(printf '%s' "$RAW" | sed -E 's#^https?://api\.telegram\.org/bot##; s#/sendMessage$##; s#^bot##')"
+          if [ -z "$TOKEN" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::TELEGRAM_TOKEN vacío o inválido. Se omiten notificaciones."
+            exit 0
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "api_url=https://api.telegram.org/bot${TOKEN}/sendMessage" >> "$GITHUB_OUTPUT"
+
+      - name: Preparar rama de trabajo
         id: branch
         run: |
-          BRANCH="agent/$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          EXISTING="${{ github.event.inputs.rama_existente }}"
+          if [ -n "$EXISTING" ] && git ls-remote --exit-code origin "$EXISTING" &>/dev/null; then
+            git fetch origin "$EXISTING"
+            git checkout "$EXISTING"
+            echo "branch=$EXISTING" >> "$GITHUB_OUTPUT"
+          else
+            BRANCH="${EXISTING:-agent/$(date +%Y%m%d-%H%M%S)}"
+            git checkout -b "$BRANCH"
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notificar inicio a Telegram
+        env:
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          REPO: ${{ github.event.inputs.repo_objetivo }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TELEGRAM_API_URL: ${{ steps.telegram.outputs.api_url }}
+        run: |
+          if [ "${{ steps.telegram.outputs.enabled }}" != "true" ]; then
+            exit 0
+          fi
+          MSG=$(cat <<EOF
+          🚀 Workflow iniciado.
+          Repo: ${REPO}
+          Rama: ${BRANCH}
+          Run: ${RUN_URL}
+          EOF
+          )
+          RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST "${TELEGRAM_API_URL}" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "Telegram HTTP $HTTP_CODE: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::No se pudo enviar la notificación de inicio."
+          fi
 
       - name: Instalar Node.js
         uses: actions/setup-node@v4
@@ -48,6 +108,26 @@ jobs:
 
       - name: Instalar Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
+
+      - name: Notificar que Claude Code empieza
+        env:
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          TELEGRAM_API_URL: ${{ steps.telegram.outputs.api_url }}
+        run: |
+          if [ "${{ steps.telegram.outputs.enabled }}" != "true" ]; then
+            exit 0
+          fi
+          MSG="🛠️ Claude Code ejecutando tarea en ${BRANCH}..."
+          RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST "${TELEGRAM_API_URL}" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "Telegram HTTP $HTTP_CODE: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::No se pudo enviar la notificación de ejecución."
+          fi
 
       - name: Ejecutar Claude Code
         env:
@@ -64,55 +144,148 @@ jobs:
           git status --short
           if [ -z "$(git status --short)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Claude Code no realizó cambios en el árbol de ficheros."
+            echo "commit_title=" >> "$GITHUB_OUTPUT"
+            echo "changed_files=" >> "$GITHUB_OUTPUT"
           else
             TITLE=$(printf '%s' "$CLAUDE_PROMPT" | head -c 72)
             git commit -m "feat: ${TITLE}" \
                        -m "" \
                        -m "Generado automáticamente por Claude Code Agent."
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            COMMIT_TITLE=$(git log -1 --pretty=%s)
+            mapfile -t FILE_ARRAY < <(git diff-tree --no-commit-id --name-only -r HEAD | head -n 12)
+            CHANGED_FILES=""
+            if [ "${#FILE_ARRAY[@]}" -gt 0 ]; then
+              CHANGED_FILES=$(IFS=', '; echo "${FILE_ARRAY[*]}")
+            fi
+            echo "commit_title=$COMMIT_TITLE" >> "$GITHUB_OUTPUT"
+            echo "changed_files=$CHANGED_FILES" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Push rama
         if: steps.commit.outputs.changed == 'true'
         run: git push origin ${{ steps.branch.outputs.branch }}
 
-      - name: Crear Pull Request
+      - name: Crear o reutilizar Pull Request
         id: pr
-        if: steps.commit.outputs.changed == 'true'
+        if: github.event.inputs.abrir_pr == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLAUDE_PROMPT: ${{ github.event.inputs.prompt }}
         run: |
+          REPO="${{ github.event.inputs.repo_objetivo }}"
+          BASE_BRANCH="${{ github.event.inputs.rama_base }}"
+          HEAD_BRANCH="${{ steps.branch.outputs.branch }}"
+
+          EXISTING_PR=$(gh pr list \
+            --repo "$REPO" \
+            --head "$HEAD_BRANCH" \
+            --base "$BASE_BRANCH" \
+            --json url \
+            -q '.[0].url')
+          if [ -n "$EXISTING_PR" ]; then
+            echo "pr_url=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+            echo "pr_action=reused" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git ls-remote --exit-code origin "$HEAD_BRANCH" >/dev/null 2>&1; then
+            echo "pr_action=missing_branch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           printf "## Cambios generados por Claude Code Agent\n\nPrompt ejecutado:\n\n%s\n\n---\nPR creado automaticamente por el Mobile Coding Agent." "$CLAUDE_PROMPT" > /tmp/pr_body.txt
+          set +e
           PR_URL=$(gh pr create \
-            --repo "${{ github.event.inputs.repo_objetivo }}" \
-            --base "${{ github.event.inputs.rama_base }}" \
-            --head "${{ steps.branch.outputs.branch }}" \
+            --repo "$REPO" \
+            --base "$BASE_BRANCH" \
+            --head "$HEAD_BRANCH" \
             --title "feat: agente Claude Code" \
-            --body-file /tmp/pr_body.txt)
+            --body-file /tmp/pr_body.txt 2>/tmp/pr_error.txt)
+          STATUS=$?
+          set -e
+          if [ $STATUS -ne 0 ]; then
+            PR_ERROR=$(tail -n 1 /tmp/pr_error.txt)
+            echo "::warning::No se pudo crear PR: $PR_ERROR"
+            echo "pr_action=error" >> "$GITHUB_OUTPUT"
+            echo "pr_error=$PR_ERROR" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "pr_action=created" >> "$GITHUB_OUTPUT"
 
       - name: Notificar resultado a Telegram
         if: always()
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_API_URL: ${{ steps.telegram.outputs.api_url }}
           CHAT_ID: ${{ github.event.inputs.chat_id }}
           PR_URL: ${{ steps.pr.outputs.pr_url }}
+          PR_ACTION: ${{ steps.pr.outputs.pr_action }}
+          PR_ERROR: ${{ steps.pr.outputs.pr_error }}
           CHANGED: ${{ steps.commit.outputs.changed }}
+          COMMIT_TITLE: ${{ steps.commit.outputs.commit_title }}
+          CHANGED_FILES: ${{ steps.commit.outputs.changed_files }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          REPO: ${{ github.event.inputs.repo_objetivo }}
+          ABRIR_PR: ${{ github.event.inputs.abrir_pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          if [ "$CHANGED" = "true" ] && [ -n "$PR_URL" ]; then
-            MSG="PR listo: ${PR_URL}"
-          elif [ "$CHANGED" = "true" ]; then
-            MSG="Rama creada pero no se pudo generar el PR. Revisa: https://github.com/${{ github.event.inputs.repo_objetivo }}/branches"
-          else
-            MSG="Claude Code no realizo cambios en el repositorio."
+          if [ "${{ steps.telegram.outputs.enabled }}" != "true" ]; then
+            exit 0
           fi
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${CHAT_ID}\",\"text\":\"${MSG}\"}")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -1)
+
+          if [ "$JOB_STATUS" = "success" ]; then
+            HEADER="✅ Workflow completado."
+          else
+            HEADER="⚠️ Workflow finalizado con estado: ${JOB_STATUS}."
+          fi
+
+          if [ "$CHANGED" = "true" ]; then
+            DETAIL="Se aplicaron cambios en ${BRANCH}."
+            if [ -n "$COMMIT_TITLE" ]; then
+              DETAIL="${DETAIL}"$'\n'"Commit: ${COMMIT_TITLE}"
+            fi
+            if [ -n "$CHANGED_FILES" ]; then
+              DETAIL="${DETAIL}"$'\n'"Archivos: ${CHANGED_FILES}"
+            fi
+          else
+            DETAIL="No hubo cambios nuevos en ${BRANCH}."
+          fi
+
+          if [ "$ABRIR_PR" = "true" ]; then
+            if [ -n "$PR_URL" ] && [ "$PR_ACTION" = "reused" ]; then
+              CIERRE="PR existente: ${PR_URL}"
+            elif [ -n "$PR_URL" ]; then
+              CIERRE="PR listo: ${PR_URL}"
+            elif [ "$PR_ACTION" = "missing_branch" ]; then
+              CIERRE="No se pudo abrir PR porque la rama aún no existe en remoto."
+            elif [ -n "$PR_ERROR" ]; then
+              CIERRE="No se pudo abrir PR: ${PR_ERROR}"
+            else
+              CIERRE="No se pudo resolver PR en este run."
+            fi
+          else
+            CIERRE="Modo iterativo activo: sigue enviando tareas para esta rama. Usa /pr cuando quieras cerrar."
+          fi
+
+          MSG=$(cat <<EOF
+          ${HEADER}
+          Repo: ${REPO}
+          Rama: ${BRANCH}
+          ${DETAIL}
+          ${CIERRE}
+          Run: ${RUN_URL}
+          EOF
+          )
+
+          RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST "${TELEGRAM_API_URL}" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
           echo "Telegram HTTP $HTTP_CODE: $BODY"
-          [ "$HTTP_CODE" = "200" ] || exit 1
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::No se pudo enviar la notificación final."
+          fi
