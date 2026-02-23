@@ -24,7 +24,7 @@ Tú (Telegram) → /repo + idea
 - Python 3.11+
 - Cuenta de GitHub con un repo donde alojar este bot
 - Bot de Telegram creado con [@BotFather](https://t.me/BotFather)
-- Tu Telegram user ID (usa [@userinfobot](https://t.me/userinfobot))
+- Tu Telegram user ID (usa [@getmyid_bot](https://t.me/userinfobot))
 
 ---
 
