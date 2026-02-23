@@ -21,6 +21,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -351,7 +354,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Bot iniciado")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
 
 
 if __name__ == "__main__":
