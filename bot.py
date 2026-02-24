@@ -138,6 +138,7 @@ def _blank_state() -> dict:
         "keepalive_task": None, # asyncio.Task
         "pending_confirm": None,  # blocked prompt awaiting explicit YES
         "output_buffer": "",    # rolling tail of recent stripped output for summaries
+        "pty_proc": None,       # winpty PtyProcess (Windows ConPTY)
     }
 
 
@@ -199,7 +200,9 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
     bot = context.bot
     loop = asyncio.get_running_loop()
 
-    logger.info("output_reader[%s]: started (mode=%s)", chat_id, "PTY" if master_fd else "pipe")
+    pty_proc = s.get("pty_proc")
+    mode = "winpty" if pty_proc else ("PTY" if master_fd else "pipe")
+    logger.info("output_reader[%s]: started (mode=%s)", chat_id, mode)
 
     buffer = ""
     last_flush = loop.time()
@@ -214,7 +217,43 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
         last_flush = loop.time()
 
     try:
-        if master_fd is not None:
+        if pty_proc is not None:
+            # ── Windows ConPTY via pywinpty ────────────────────────────────
+            queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+            def _winpty_thread():
+                try:
+                    while pty_proc.isalive():
+                        try:
+                            data = pty_proc.read(4096)
+                            if data:
+                                loop.call_soon_threadsafe(queue.put_nowait, data)
+                        except EOFError:
+                            break
+                        except Exception as e:
+                            logger.error("winpty read error for chat %s: %s", chat_id, e)
+                            break
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+
+            threading.Thread(target=_winpty_thread, daemon=True).start()
+
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=FLUSH_INTERVAL)
+                except asyncio.TimeoutError:
+                    await _flush()
+                    continue
+
+                if item is None:
+                    break
+                buffer += item.decode("utf-8", errors="replace")
+
+                now = loop.time()
+                if len(buffer) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
+                    await _flush()
+
+        elif master_fd is not None:
             # ── Unix PTY: thread reads master_fd, puts bytes in queue ──────
             queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
@@ -284,6 +323,13 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
         # Mark session as ended
         s["session_active"] = False
         s["proc"] = None
+
+        if s.get("pty_proc"):
+            try:
+                s["pty_proc"].terminate(force=True)
+            except Exception:
+                pass
+            s["pty_proc"] = None
 
         if master_fd is not None:
             try:
@@ -430,7 +476,31 @@ async def spawn_claude(
             logger.warning("PTY spawn failed (%s) — falling back to pipes", e)
             master_fd = None
 
-    # ── Pipe fallback (Windows or PTY failure) ─────────────────────────────
+    # ── Windows ConPTY via pywinpty ────────────────────────────────────────
+    if IS_WINDOWS and master_fd is None:
+        try:
+            from winpty import PtyProcess as _WinPty
+            pty_proc = _WinPty.spawn(
+                cmd,
+                dimensions=(50, 160),
+                cwd=cwd,
+                env={**os.environ, "COLUMNS": "160", "LINES": "50"},
+            )
+            logger.info("spawn_claude[%s]: using Windows ConPTY (pywinpty)", chat_id)
+            s["pty_proc"] = pty_proc
+            s["proc"] = None
+            s["master_fd"] = None
+            s["session_active"] = True
+            pty_proc.write((prompt + "\r\n").encode())
+            loop = asyncio.get_running_loop()
+            s["output_task"] = loop.create_task(_output_reader(chat_id, context))
+            s["keepalive_task"] = loop.create_task(_keepalive(chat_id, context))
+            return
+        except Exception as e:
+            logger.warning("winpty spawn failed (%s) — falling back to pipes", e)
+            s["pty_proc"] = None
+
+    # ── Pipe fallback (Windows without pywinpty, or PTY failure) ───────────
     if master_fd is None:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -460,12 +530,13 @@ async def spawn_claude(
 # ── Relay user input to Claude Code stdin ────────────────────────────────────
 async def relay_input(chat_id: int, text: str) -> None:
     s = get_state(chat_id)
-    data = (text + "\n").encode()
     try:
-        if s["master_fd"] is not None:
-            os.write(s["master_fd"], data)
+        if s.get("pty_proc"):
+            s["pty_proc"].write((text + "\r\n").encode())
+        elif s["master_fd"] is not None:
+            os.write(s["master_fd"], (text + "\n").encode())
         elif s["proc"] and s["proc"].stdin:
-            s["proc"].stdin.write(data)
+            s["proc"].stdin.write((text + "\n").encode())
             await s["proc"].stdin.drain()
     except OSError as e:
         logger.error("relay_input error: %s", e)
@@ -637,12 +708,17 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
     s = get_state(update.effective_chat.id)
-    if not s["session_active"] or s["proc"] is None:
+    has_proc = s["session_active"] and (
+        s.get("pty_proc") or s["master_fd"] is not None or s["proc"] is not None
+    )
+    if not has_proc:
         await update.message.reply_text("No active session to stop.")
         return
     try:
-        if s["master_fd"] is not None:
-            os.write(s["master_fd"], b"\x03")  # Ctrl+C over PTY
+        if s.get("pty_proc"):
+            s["pty_proc"].write(b"\x03")       # Ctrl+C over ConPTY
+        elif s["master_fd"] is not None:
+            os.write(s["master_fd"], b"\x03")  # Ctrl+C over Unix PTY
         elif IS_WINDOWS:
             s["proc"].terminate()
         else:
@@ -658,6 +734,11 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     s = get_state(update.effective_chat.id)
     cwd = s["cwd"]  # preserve current directory
 
+    if s.get("pty_proc"):
+        try:
+            s["pty_proc"].terminate(force=True)
+        except Exception:
+            pass
     if s["proc"]:
         try:
             s["proc"].kill()
