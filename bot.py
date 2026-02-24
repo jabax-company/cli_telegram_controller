@@ -339,13 +339,24 @@ async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
             if not s["session_active"]:
                 break
             recent = s.get("output_buffer", "").strip()
-            if recent:
+            if not recent:
+                continue
+            try:
                 summary = await _summarize_output(recent)
-                await context.bot.send_message(
-                    chat_id,
-                    f"📊 *Status update*\n{summary}",
-                    parse_mode="Markdown",
-                )
+                try:
+                    await context.bot.send_message(
+                        chat_id,
+                        f"📊 *Status update*\n{summary}",
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    # Markdown parse error (e.g. special chars in summary) — retry plain
+                    await context.bot.send_message(
+                        chat_id,
+                        f"📊 Status update\n{summary}",
+                    )
+            except Exception as e:
+                logger.warning("keepalive summary failed for chat %s: %s", chat_id, e)
     except asyncio.CancelledError:
         pass
 
