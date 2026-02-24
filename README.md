@@ -40,7 +40,7 @@ Open Telegram, find your bot, send `/start`.
 - A Telegram bot token — create one with [@BotFather](https://t.me/BotFather)
 - Your numeric Telegram user ID — get it from [@userinfobot](https://t.me/userinfobot)
 
-No Anthropic API key needed (Claude Code manages its own auth).
+An Anthropic API key is **optional but recommended** — used for AI status summaries (see below). Claude Code already requires one, so it is likely already set in your environment.
 No GitHub PAT needed (your local git credentials are used).
 
 ---
@@ -51,6 +51,7 @@ No GitHub PAT needed (your local git credentials are used).
 |---|---|---|---|
 | `TELEGRAM_TOKEN` | Yes | — | Bot token from @BotFather |
 | `TELEGRAM_USER_ID` | Yes | — | Your numeric Telegram ID |
+| `ANTHROPIC_API_KEY` | No | — | Enables AI status summaries every 5 min via Claude Haiku. Falls back to raw output lines if unset. Claude Code already needs this key, so it is likely already in your environment. |
 | `INITIAL_DIR` | No | `~` | Default working directory on start |
 | `RESTRICT_PATHS` | No | `false` | Set `true` to add `--allowedPaths` (restricts Claude to the project dir) |
 | `BLOCKED_PATTERNS` | No | — | Comma-separated extra patterns to block before sending to Claude Code |
@@ -171,7 +172,8 @@ On Windows: falls back to subprocess pipes (functional, no TUI).
 |---|---|
 | Output ≤ 3500 chars | Sent as-is in a code block |
 | Output > 3500 chars | First 3500 chars + `(output truncated — ask Claude to summarize)` |
-| No output for 30s | `⏳ Still working...` |
+| No output for 30 s | `⏳ Still working...` (one-time nudge) |
+| Every 5 min while active | `📊 Status update` — 1–2 sentence AI summary of recent output (Claude Haiku). Falls back to last 8 raw output lines if `ANTHROPIC_API_KEY` is not set. |
 | Session ended | `✅ Session ended.` + prompt for next task |
 
 ---
@@ -181,7 +183,7 @@ On Windows: falls back to subprocess pipes (functional, no TUI).
 | File | Purpose |
 |---|---|
 | `bot.py` | Main bot — PTY bridge, commands, session state |
-| `requirements.txt` | `python-telegram-bot`, `python-dotenv` |
+| `requirements.txt` | `python-telegram-bot`, `python-dotenv`, `anthropic` |
 | `.env.example` | Template for environment variables |
 | `setup.sh` | Interactive setup script |
 | `.github/workflows/agente.yml` | Unchanged — stays on `main` branch |
