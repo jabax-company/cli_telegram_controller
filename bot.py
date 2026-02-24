@@ -34,7 +34,9 @@ load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_USER_ID = int(os.environ["TELEGRAM_USER_ID"])
-INITIAL_DIR = os.path.expanduser(os.environ.get("INITIAL_DIR", "~"))
+_SCRIPT_PARENT = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(os.path.expanduser(os.environ.get("INITIAL_DIR", str(_SCRIPT_PARENT))))
+INITIAL_DIR = str(BASE_DIR)
 RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
 _extra_blocked = os.environ.get("BLOCKED_PATTERNS", "")
 EXTRA_BLOCKED = [p.strip() for p in _extra_blocked.split(",") if p.strip()]
@@ -99,6 +101,26 @@ def load_projects() -> dict[str, str]:
 
 def save_projects(projects: dict[str, str]) -> None:
     PROJECTS_FILE.write_text(json.dumps(projects, indent=2), encoding="utf-8")
+
+
+def resolve_path(arg: str) -> str | None:
+    """Resolve a /cd argument in priority order:
+    1. Saved project name
+    2. Absolute path or ~-expanded path
+    3. Relative to BASE_DIR
+    4. Relative to home dir
+    """
+    projects = load_projects()
+    if arg in projects:
+        return projects[arg]
+    expanded = os.path.expanduser(arg)
+    if os.path.isabs(expanded):
+        return expanded if os.path.isdir(expanded) else None
+    for base in (BASE_DIR, Path.home()):
+        candidate = str(base / arg)
+        if os.path.isdir(candidate):
+            return candidate
+    return None
 
 
 # ── Session state (per chat_id) ───────────────────────────────────────────────
@@ -271,12 +293,10 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Periodically remind the user Claude Code is still running."""
+    """Remind the user once that Claude Code is still running, then stay silent."""
     try:
-        while True:
-            await asyncio.sleep(KEEPALIVE_SECS)
-            if not get_state(chat_id)["session_active"]:
-                break
+        await asyncio.sleep(KEEPALIVE_SECS)
+        if get_state(chat_id)["session_active"]:
             try:
                 await context.bot.send_message(chat_id, "⏳ Still working...")
             except Exception:
@@ -371,15 +391,36 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     s = get_state(update.effective_chat.id)
     await update.message.reply_text(
         "*Claude Code Companion*\n\n"
-        f"Directory: `{s['cwd']}`\n\n"
-        "*Commands:*\n"
-        "• `/cd <path|name>` — change working directory\n"
-        "• `/projects` — list saved projects (tap to switch)\n"
-        "• `/save <name>` — save current dir as a named project\n"
-        "• `/status` — show current dir + session state\n"
-        "• `/stop` — interrupt Claude Code (Ctrl+C)\n"
-        "• `/reset` — kill session, start fresh\n\n"
-        "Send any task description and Claude Code starts! 🚀",
+        f"Base dir: `{BASE_DIR}`\n"
+        f"Current dir: `{s['cwd']}`\n\n"
+        "*Navigation:*\n"
+        "• `/cd` — go to base dir\n"
+        "• `/cd myapp` — switch to BASE\\_DIR/myapp (auto-resolved)\n"
+        "• `/cd ~/other/path` — full path\n"
+        "• `/cd saved-name` — jump to a saved project\n"
+        "• `/paths` — see all available directories\n"
+        "• `/projects` — tap to switch between saved projects\n"
+        "• `/save myapp` — save current dir as a named project\n\n"
+        "*Session:*\n"
+        "• `/status` — current dir + active/idle\n"
+        "• `/plan <task>` — ask Claude to plan without making changes\n"
+        "• `/stop` — Ctrl+C to Claude Code\n"
+        "• `/reset` — kill session, stay in same dir\n\n"
+        "*Example conversation:*\n"
+        "```\n"
+        "You:  /cd claude_code_bot\n"
+        "Bot:  Now in: .../dev/claude_code_bot\n\n"
+        "You:  add unit tests for resolve_path\n"
+        "Bot:  Starting Claude Code...\n"
+        "Bot:  [Claude streams output here]\n"
+        "Bot:  Do you want me to run the tests too?\n\n"
+        "You:  yes, run them\n"
+        "Bot:  [test results stream here]\n"
+        "Bot:  ✅ Session ended.\n\n"
+        "You:  /plan refactor the auth module\n"
+        "Bot:  [Claude outlines a plan, no files changed]\n"
+        "Bot:  ✅ Session ended.\n"
+        "```",
         parse_mode="Markdown",
     )
 
@@ -400,21 +441,19 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_cd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
+    chat_id = update.effective_chat.id
     if not context.args:
-        await update.message.reply_text(
-            "Usage: `/cd <path or project name>`", parse_mode="Markdown"
-        )
+        get_state(chat_id)["cwd"] = str(BASE_DIR)
+        await update.message.reply_text(f"Now in: `{BASE_DIR}`", parse_mode="Markdown")
         return
     arg = " ".join(context.args)
-    projects = load_projects()
-    # Saved name takes priority; fall back to literal/expanded path
-    target = projects.get(arg) or os.path.expanduser(arg)
-    if not os.path.isdir(target):
+    target = resolve_path(arg)
+    if target is None:
         await update.message.reply_text(
-            f"Directory not found: `{target}`", parse_mode="Markdown"
+            f"Directory not found: `{arg}`", parse_mode="Markdown"
         )
         return
-    get_state(update.effective_chat.id)["cwd"] = target
+    get_state(chat_id)["cwd"] = target
     await update.message.reply_text(f"Now in: `{target}`", parse_mode="Markdown")
 
 
@@ -454,6 +493,57 @@ async def cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Saved `{name}` → `{s['cwd']}`", parse_mode="Markdown"
     )
+
+
+async def cmd_paths(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    projects = load_projects()
+    lines = []
+
+    if projects:
+        lines.append("*Saved projects:*")
+        for name, path in projects.items():
+            lines.append(f"  `/cd {name}` → `{path}`")
+
+    base_subdirs = []
+    try:
+        base_subdirs = sorted(d.name for d in BASE_DIR.iterdir() if d.is_dir())
+    except Exception:
+        pass
+
+    if base_subdirs:
+        lines.append(f"\n*Folders in `{BASE_DIR}`:*")
+        for d in base_subdirs:
+            lines.append(f"  `/cd {d}`")
+
+    if not lines:
+        lines.append(f"No saved projects and no subdirectories found in `{BASE_DIR}`.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/plan <task description>`", parse_mode="Markdown")
+        return
+    chat_id = update.effective_chat.id
+    s = get_state(chat_id)
+    if s["session_active"]:
+        await update.message.reply_text(
+            "A session is already active. Use /stop or /reset first."
+        )
+        return
+    task = " ".join(context.args)
+    prompt = (
+        "Please plan the following task step by step. "
+        "Do NOT execute any code, modify any files, or run any commands. "
+        "Just outline what you would do and why:\n\n" + task
+    )
+    audit(chat_id, f"PLAN: {task}")
+    await _run_task(chat_id, prompt, context, update)
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -599,8 +689,10 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cd", cmd_cd))
+    app.add_handler(CommandHandler("paths", cmd_paths))
     app.add_handler(CommandHandler("projects", cmd_projects))
     app.add_handler(CommandHandler("save", cmd_save))
+    app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CallbackQueryHandler(handle_callback))
