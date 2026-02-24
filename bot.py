@@ -56,6 +56,8 @@ logging.basicConfig(
 for _noisy in ("httpx", "telegram", "telegram.ext.Application"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+_lvl = os.environ.get("LOG_LEVEL", "INFO").upper()
+logger.setLevel(getattr(logging, _lvl, logging.INFO))
 
 # ── Blocklist ─────────────────────────────────────────────────────────────────
 _RAW_BLOCKLIST = [
@@ -197,12 +199,15 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
     bot = context.bot
     loop = asyncio.get_running_loop()
 
+    logger.info("output_reader[%s]: started (mode=%s)", chat_id, "PTY" if master_fd else "pipe")
+
     buffer = ""
     last_flush = loop.time()
 
     async def _flush():
         nonlocal buffer, last_flush
         if buffer:
+            logger.debug("_flush[%s]: %d chars", chat_id, len(buffer))
             s["output_buffer"] = (s["output_buffer"] + strip_ansi(buffer))[-SUMMARY_CHARS:]
             await send_chunk(bot, chat_id, buffer)
             buffer = ""
@@ -255,10 +260,13 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
                 try:
                     data = await asyncio.wait_for(proc.stdout.read(4096), timeout=FLUSH_INTERVAL)
                     if not data:   # EOF
+                        logger.info("output_reader[%s]: EOF on stdout", chat_id)
                         break
+                    logger.debug("output_reader[%s]: got %d bytes", chat_id, len(data))
                     buffer += data.decode("utf-8", errors="replace")
                 except asyncio.TimeoutError:
                     # No data in the flush window; check if process ended
+                    logger.debug("output_reader[%s]: read timeout, returncode=%s", chat_id, proc.returncode)
                     if proc.returncode is not None:
                         break
 
@@ -298,6 +306,7 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def _summarize_output(recent: str) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
+    logger.info("_summarize_output: %d chars, api_key present=%s", len(recent), bool(api_key))
     if api_key:
         try:
             import anthropic
@@ -315,50 +324,72 @@ async def _summarize_output(recent: str) -> str:
                     ),
                 }],
             )
-            return resp.content[0].text.strip()
-        except Exception:
-            pass  # fall through to raw fallback
+            result = resp.content[0].text.strip()
+            logger.info("_summarize_output: API ok, returned %d chars", len(result))
+            return result
+        except Exception as e:
+            logger.warning("_summarize_output: API call failed (%s), using fallback", e)
     # Fallback: last 8 non-empty lines of raw output
     lines = [l for l in recent.splitlines() if l.strip()][-8:]
+    logger.info("_summarize_output: fallback, %d lines", len(lines))
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Warn once after KEEPALIVE_SECS, then send AI summaries every SUMMARY_INTERVAL."""
+async def _send_summary(chat_id: int, bot, recent: str) -> None:
+    """Generate and send one status summary. Used by _keepalive."""
+    summary = await _summarize_output(recent)
+    logger.info("keepalive[%s]: sending summary (%d chars)", chat_id, len(summary))
     try:
-        # First nudge
+        await bot.send_message(
+            chat_id,
+            f"📊 *Status update*\n{summary}",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.warning("keepalive[%s]: Markdown send failed (%s), retrying plain", chat_id, e)
+        await bot.send_message(chat_id, f"📊 Status update\n{summary}")
+
+
+async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Warn + first summary after KEEPALIVE_SECS, then summaries every SUMMARY_INTERVAL."""
+    try:
+        # First nudge + immediate first summary
         await asyncio.sleep(KEEPALIVE_SECS)
-        if not get_state(chat_id)["session_active"]:
+        s = get_state(chat_id)
+        if not s["session_active"]:
+            logger.info("keepalive[%s]: session ended before nudge", chat_id)
             return
+        logger.info("keepalive[%s]: sending nudge", chat_id)
         await context.bot.send_message(chat_id, "⏳ Still working...")
 
-        # Periodic summaries
+        recent = s.get("output_buffer", "").strip()
+        logger.info("keepalive[%s]: first summary check, buffer=%d chars", chat_id, len(recent))
+        if recent:
+            try:
+                await _send_summary(chat_id, context.bot, recent)
+            except Exception as e:
+                logger.warning("keepalive[%s]: first summary failed: %s", chat_id, e)
+        else:
+            logger.warning("keepalive[%s]: output_buffer empty at first check — no output from Claude Code yet", chat_id)
+
+        # Periodic summaries every SUMMARY_INTERVAL
         while True:
             await asyncio.sleep(SUMMARY_INTERVAL)
             s = get_state(chat_id)
             if not s["session_active"]:
+                logger.info("keepalive[%s]: session ended, stopping", chat_id)
                 break
             recent = s.get("output_buffer", "").strip()
+            logger.info("keepalive[%s]: summary tick, buffer=%d chars", chat_id, len(recent))
             if not recent:
+                logger.warning("keepalive[%s]: output_buffer empty, skipping", chat_id)
                 continue
             try:
-                summary = await _summarize_output(recent)
-                try:
-                    await context.bot.send_message(
-                        chat_id,
-                        f"📊 *Status update*\n{summary}",
-                        parse_mode="Markdown",
-                    )
-                except Exception:
-                    # Markdown parse error (e.g. special chars in summary) — retry plain
-                    await context.bot.send_message(
-                        chat_id,
-                        f"📊 Status update\n{summary}",
-                    )
+                await _send_summary(chat_id, context.bot, recent)
             except Exception as e:
-                logger.warning("keepalive summary failed for chat %s: %s", chat_id, e)
+                logger.warning("keepalive[%s]: summary failed: %s", chat_id, e)
     except asyncio.CancelledError:
-        pass
+        logger.info("keepalive[%s]: cancelled", chat_id)
 
 
 # ── Spawn Claude Code ─────────────────────────────────────────────────────────
