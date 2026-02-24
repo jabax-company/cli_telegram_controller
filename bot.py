@@ -89,6 +89,8 @@ MAX_MSG = 3500          # Telegram message char limit with breathing room
 KEEPALIVE_SECS = 30     # Send "still working" after this many idle seconds
 FLUSH_INTERVAL = 2.0    # Seconds between output flushes to Telegram
 FLUSH_SIZE = 500        # Bytes before forcing a flush
+SUMMARY_INTERVAL = 300  # seconds between periodic status summaries (5 min)
+SUMMARY_CHARS = 4000    # chars of recent output to send to the API
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
@@ -133,6 +135,7 @@ def _blank_state() -> dict:
         "output_task": None,    # asyncio.Task
         "keepalive_task": None, # asyncio.Task
         "pending_confirm": None,  # blocked prompt awaiting explicit YES
+        "output_buffer": "",    # rolling tail of recent stripped output for summaries
     }
 
 
@@ -200,6 +203,7 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
     async def _flush():
         nonlocal buffer, last_flush
         if buffer:
+            s["output_buffer"] = (s["output_buffer"] + strip_ansi(buffer))[-SUMMARY_CHARS:]
             await send_chunk(bot, chat_id, buffer)
             buffer = ""
         last_flush = loop.time()
@@ -292,15 +296,56 @@ async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
             pass
 
 
+async def _summarize_output(recent: str) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        try:
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=api_key)
+            resp = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=120,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "This is recent terminal output from a Claude Code session "
+                        "(an AI coding assistant). In 1-2 sentences describe what it "
+                        "is currently doing or has just done. Be specific and brief:\n\n"
+                        + recent[-SUMMARY_CHARS:]
+                    ),
+                }],
+            )
+            return resp.content[0].text.strip()
+        except Exception:
+            pass  # fall through to raw fallback
+    # Fallback: last 8 non-empty lines of raw output
+    lines = [l for l in recent.splitlines() if l.strip()][-8:]
+    return "```\n" + "\n".join(lines) + "\n```"
+
+
 async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Remind the user once that Claude Code is still running, then stay silent."""
+    """Warn once after KEEPALIVE_SECS, then send AI summaries every SUMMARY_INTERVAL."""
     try:
+        # First nudge
         await asyncio.sleep(KEEPALIVE_SECS)
-        if get_state(chat_id)["session_active"]:
-            try:
-                await context.bot.send_message(chat_id, "⏳ Still working...")
-            except Exception:
-                pass
+        if not get_state(chat_id)["session_active"]:
+            return
+        await context.bot.send_message(chat_id, "⏳ Still working...")
+
+        # Periodic summaries
+        while True:
+            await asyncio.sleep(SUMMARY_INTERVAL)
+            s = get_state(chat_id)
+            if not s["session_active"]:
+                break
+            recent = s.get("output_buffer", "").strip()
+            if recent:
+                summary = await _summarize_output(recent)
+                await context.bot.send_message(
+                    chat_id,
+                    f"📊 *Status update*\n{summary}",
+                    parse_mode="Markdown",
+                )
     except asyncio.CancelledError:
         pass
 
