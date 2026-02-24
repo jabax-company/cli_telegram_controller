@@ -1,146 +1,187 @@
-# Mobile Coding Agent - Fase 1
+# Claude Code Companion — local-mode
 
-Bot de Telegram que refina ideas de desarrollo con Claude (Haiku) y las ejecuta
-mediante Claude Code CLI en un workflow de GitHub Actions.
+A Telegram interface for **Claude Code developers**.
 
-Modo por defecto:
-- iterativo sobre la misma rama
-- PR solo cuando tu lo pides con `/pr`
+Instead of a general shell, this bot bridges Telegram directly to Claude Code's interactive mode running on your machine. Claude Code already handles running tests, starting servers, committing, pushing, and opening PRs — you just ask it in plain language.
 
-## Flujo
-
-```text
-Tu (Telegram) -> /repo + idea
-      |
-  Bot pregunta 2-3 clarificaciones (Haiku)
-      |
-  Muestra prompt final + boton Ejecutar
-      |
-  GitHub Actions: checkout -> claude --print -> commit/push en rama activa
-      |
-  Bot envia estado + resumen de cambios por Telegram
-      |
-  Cuando quieras cerrar: /pr + siguiente ejecucion -> abre/reutiliza PR
+```
+You (Telegram) ──► Claude Code (interactive, on your machine) ──► your project
+Claude Code output / questions ──► Telegram
+Your replies ──► Claude Code stdin
 ```
 
 ---
 
-## Requisitos previos
-
-- Python 3.11+
-- Cuenta de GitHub con un repo donde alojar este bot
-- Bot de Telegram creado con [@BotFather](https://t.me/BotFather)
-- Tu Telegram user ID (usa [@getmyid_bot](https://t.me/userinfobot))
-
----
-
-## Instalacion local
+## Quick start
 
 ```bash
-# 1. Clonar y entrar al directorio
-git clone https://github.com/TU_USUARIO/claude_code_bot
+# 1. Clone and enter the directory
+git clone https://github.com/YOUR_USER/claude_code_bot
 cd claude_code_bot
 
-# 2. Instalar dependencias
-pip install -r requirements.txt
+# 2. Run setup (prompts for your 2 required values, installs deps)
+bash setup.sh
 
-# 3. Copiar y rellenar variables de entorno
-cp .env.example .env
-# Edita .env con tus valores reales
-```
+# 3. Authenticate Claude Code (one-time)
+claude auth login
 
-### Variables en `.env`
-
-| Variable | Descripcion |
-|---|---|
-| `TELEGRAM_TOKEN` | Token del bot (de @BotFather) |
-| `TELEGRAM_USER_ID` | Tu ID numerico de Telegram |
-| `ANTHROPIC_API_KEY` | API key de Anthropic |
-| `ANTHROPIC_MODEL` | Modelo para refinamiento (default: `claude-haiku-4-5-20251001`) |
-| `GH_PAT` | GitHub Personal Access Token (permisos: `repo` + `workflow`) |
-| `GITHUB_WORKFLOW_REPO_OWNER` | Tu usuario de GitHub |
-| `GITHUB_WORKFLOW_REPO_NAME` | Nombre de este repo (ej. `claude_code_bot`) |
-
----
-
-## Secretos en GitHub
-
-Ve a **Settings -> Secrets and variables -> Actions** de este repo y anade:
-
-| Secret | Valor |
-|---|---|
-| `TELEGRAM_TOKEN` | Igual que en `.env` |
-| `ANTHROPIC_API_KEY` | Igual que en `.env` |
-| `GH_PAT` | Igual que en `.env` |
-
-> `GH_PAT` necesita acceso de escritura al repo objetivo (el repo donde Claude hara cambios), no solo a este repo.
-
----
-
-## Ejecutar el bot en local
-
-```bash
+# 4. Start the bot
 python bot.py
 ```
 
----
-
-## Uso
-
-```text
-/start              -> Instrucciones
-/repo owner/repo    -> Establece el repositorio objetivo
-<escribe tu idea>   -> Inicia el refinamiento con Haiku
-Ejecutar            -> Dispara el workflow de GitHub Actions
-/rama               -> Ver rama activa
-/rama nueva         -> Reiniciar rama activa
-/pr                 -> La proxima ejecucion abre/reutiliza PR
-/cancelar           -> Resetea la conversacion (mantiene repo configurado)
-```
-
-### Ejemplo de sesion iterativa
-
-```text
-Tu:   /repo miusuario/mi-api-python
-Bot:  Repositorio configurado
-
-Tu:   quiero anadir autenticacion JWT
-Bot:  (preguntas de clarificacion)
-Bot:  Prompt generado + botones Ejecutar/Cancelar
-
-Tu:   [click Ejecutar]
-Bot:  Workflow en marcha (rama agent/...)
-
-Bot:  Workflow completado. Cambios aplicados en rama agent/...
-      (puedes seguir enviando mas tareas y seguira en la misma rama)
-
-Tu:   /pr
-Bot:  Cierre con PR activado para la proxima ejecucion
-
-Tu:   [click Ejecutar en la siguiente tarea]
-Bot:  PR listo: https://github.com/miusuario/mi-api-python/pull/7
-```
+Open Telegram, find your bot, send `/start`.
 
 ---
 
-## Probar el workflow manualmente
+## Requirements
 
-Desde la pestana **Actions** de este repo -> *Agente Claude Code* -> **Run workflow**:
+- Python 3.10+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- A Telegram bot token — create one with [@BotFather](https://t.me/BotFather)
+- Your numeric Telegram user ID — get it from [@userinfobot](https://t.me/userinfobot)
 
-```text
-prompt:         Anade un endpoint GET /health que devuelva {"status":"ok"}
-repo_objetivo:  owner/nombre-repo
-rama_base:      main
-chat_id:        TU_CHAT_ID_NUMERICO
-rama_existente: (opcional) agent/20260223-123000
-abrir_pr:       false   # true para cerrar y abrir/reutilizar PR
-```
+No Anthropic API key needed (Claude Code manages its own auth).
+No GitHub PAT needed (your local git credentials are used).
 
 ---
 
-## Notas de diseno
+## Configuration
 
-- Sin base de datos: el historial vive en memoria y se pierde al reiniciar el bot.
-- Whitelist: solo responde a `TELEGRAM_USER_ID`.
-- Rama base: `main` por defecto (`RAMA_BASE` en `bot.py`).
-- Modelo: Haiku por defecto (`ANTHROPIC_MODEL` en `.env`).
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TELEGRAM_TOKEN` | Yes | — | Bot token from @BotFather |
+| `TELEGRAM_USER_ID` | Yes | — | Your numeric Telegram ID |
+| `INITIAL_DIR` | No | `~` | Default working directory on start |
+| `RESTRICT_PATHS` | No | `false` | Set `true` to add `--allowedPaths` (restricts Claude to the project dir) |
+| `BLOCKED_PATTERNS` | No | — | Comma-separated extra patterns to block before sending to Claude Code |
+
+Copy `.env.example` to `.env` and fill in your values, or just run `./setup.sh`.
+
+---
+
+## Bot commands
+
+| Command | Description |
+|---|---|
+| `/start` | Welcome message + quick reference |
+| `/cd <path>` | Change working directory (full path or saved project name) |
+| `/projects` | List saved projects as tappable buttons |
+| `/save <name>` | Save current directory as a named project |
+| `/status` | Show current directory and whether a session is active |
+| `/stop` | Send Ctrl+C to Claude Code (interrupt current task) |
+| `/reset` | Kill active session, clear state, stay in same directory |
+
+---
+
+## How sessions work
+
+Send a task in plain language → Claude Code starts in your current directory.
+
+```
+You:        add a health check endpoint
+Bot:        Starting Claude Code in /home/user/myapp...
+Bot:        (Claude Code output streams here)
+Bot:        Should I create a new file? 1. Yes  2. No
+You:        1
+Bot:        (Claude Code continues...)
+Bot:        ✅ Session ended.
+```
+
+While a session is active, **all your messages are forwarded to Claude Code's stdin** — so you can answer its questions, pick numbered options, or give follow-up instructions.
+
+Use `/stop` to send Ctrl+C (interrupt), or `/reset` to kill the process entirely.
+
+---
+
+## Project navigation
+
+Save your projects once, switch between them with a tap:
+
+```
+/cd ~/projects/myapp        → switch by path
+/save myapp                 → save it as "myapp"
+/projects                   → tap to switch
+/cd myapp                   → switch by name
+```
+
+Projects are stored in `~/.claude_code_bot/projects.json`.
+
+---
+
+## What Claude Code can do for you
+
+Just ask in plain language — no special commands needed:
+
+- `add a REST endpoint for user login`
+- `run the tests and fix any failures`
+- `commit and push this branch`
+- `create a PR from this branch to main`
+- `start the dev server and tell me the port`
+- `refactor the auth module to use JWT`
+
+Claude Code handles the git, the files, the shell commands — you just describe the goal.
+
+---
+
+## Security model
+
+| Layer | What it protects against |
+|---|---|
+| `TELEGRAM_USER_ID` check | Anyone else using the bot (primary gate) |
+| `RESTRICT_PATHS=true` (opt-in) | Claude Code writing outside the project directory |
+| Blocklist pre-check | Obvious catastrophic prompts (e.g. `rm -rf ~`, fork bombs) |
+| Non-root execution | System-level damage |
+| Audit log (`~/.claude_code_bot/audit.log`) | Accountability — every prompt logged |
+
+**Blocklist**: before sending a prompt to Claude Code, the bot checks for patterns like `rm -rf /`, `rm -rf ~`, `sudo rm`, `dd if=`, `mkfs`, fork bombs, and `curl | bash`. If matched, it warns and asks for explicit `YES` confirmation.
+
+**Trade-off with `RESTRICT_PATHS=false` (default)**: Claude Code can touch any file your user account can — the same as running it in your terminal. The `TELEGRAM_USER_ID` check ensures only you control it.
+
+---
+
+## Architecture
+
+```
+bot.py
+  │
+  ├─ /cd /projects /save       →  working directory navigation
+  │
+  ├─ User sends task
+  │     ├─ Security pre-check (blocklist)
+  │     └─ Spawn: claude --dangerously-skip-permissions [--allowedPaths cwd]
+  │               cwd = current project directory
+  │
+  ├─ PTY bridge (async):
+  │     read output ──strip ANSI──buffer──► Telegram messages
+  │     Telegram reply ──────────────────► Claude Code stdin
+  │
+  ├─ /stop    →  Ctrl+C to Claude Code
+  ├─ /reset   →  kill session, start fresh
+  └─ /status  →  show cwd + session state
+```
+
+On Linux/macOS: Claude Code runs in a proper PTY (full terminal UI).
+On Windows: falls back to subprocess pipes (functional, no TUI).
+
+---
+
+## Output handling
+
+| Situation | Behavior |
+|---|---|
+| Output ≤ 3500 chars | Sent as-is in a code block |
+| Output > 3500 chars | First 3500 chars + `(output truncated — ask Claude to summarize)` |
+| No output for 30s | `⏳ Still working...` |
+| Session ended | `✅ Session ended.` + prompt for next task |
+
+---
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `bot.py` | Main bot — PTY bridge, commands, session state |
+| `requirements.txt` | `python-telegram-bot`, `python-dotenv` |
+| `.env.example` | Template for environment variables |
+| `setup.sh` | Interactive setup script |
+| `.github/workflows/agente.yml` | Unchanged — stays on `main` branch |

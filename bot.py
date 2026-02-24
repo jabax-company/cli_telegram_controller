@@ -1,10 +1,23 @@
-﻿import asyncio
+"""Claude Code Companion — local-mode bot.
+
+Telegram <-> Claude Code interactive PTY bridge.
+
+You (Telegram) ──► Claude Code (interactive, on your machine) ──► your project
+Claude Code output/questions ──► Telegram
+Your replies ──► Claude Code stdin
+"""
+
+import asyncio
+import json
 import logging
 import os
 import re
+import signal
+import sys
+import threading
+import time
+from pathlib import Path
 
-import httpx
-from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -18,687 +31,590 @@ from telegram.ext import (
 
 load_dotenv()
 
+# ── Config ────────────────────────────────────────────────────────────────────
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_USER_ID = int(os.environ["TELEGRAM_USER_ID"])
+INITIAL_DIR = os.path.expanduser(os.environ.get("INITIAL_DIR", "~"))
+RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
+_extra_blocked = os.environ.get("BLOCKED_PATTERNS", "")
+EXTRA_BLOCKED = [p.strip() for p in _extra_blocked.split(",") if p.strip()]
+IS_WINDOWS = sys.platform == "win32"
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+DATA_DIR = Path.home() / ".claude_code_bot"
+PROJECTS_FILE = DATA_DIR / "projects.json"
+AUDIT_LOG = DATA_DIR / "audit.log"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
-logging.getLogger("telegram").setLevel(logging.WARNING)
+for _noisy in ("httpx", "telegram", "telegram.ext.Application"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# â"€â"€ Config â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_USER_ID = int(os.environ["TELEGRAM_USER_ID"])
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-GH_PAT = os.environ["GH_PAT"]
-WORKFLOW_REPO_OWNER = os.environ["GITHUB_WORKFLOW_REPO_OWNER"]
-WORKFLOW_REPO_NAME = os.environ["GITHUB_WORKFLOW_REPO_NAME"]
+# ── Blocklist ─────────────────────────────────────────────────────────────────
+_RAW_BLOCKLIST = [
+    r"rm\s+-[rf]{1,2}\s+[/~]",
+    r"rm\s+-[rf]{1,2}\s+\*",
+    r"sudo\s+rm",
+    r"\bdd\s+if=/dev/",
+    r"\bmkfs\b",
+    r":\(\)\s*\{.*\}",               # fork bomb
+    r">\s*/dev/sd[a-z]",
+    r"chmod\s+-[Rr]\s+777\s+/",
+    r"(wget|curl)\s+[^\s]+\s*\|\s*(ba)?sh",
+    r"python\d*\s+[^\|]+\|\s*(ba)?sh",
+] + [re.escape(p) for p in EXTRA_BLOCKED]
 
-RAMA_BASE = "main"
-REPOS_PER_PAGE = 8
+BLOCKLIST: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE | re.DOTALL) for p in _RAW_BLOCKLIST
+]
 
-anthropic = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+ANSI_RE = re.compile(
+    r"\x1b\[[0-9;]*[a-zA-Z]"
+    r"|\x1b\][^\x07]*\x07"
+    r"|\x1b[()][AB012]"
+    r"|\r"
+    r"|\x1b=|\x1b>"
+    r"|\x1b[78]"
+    r"|\x1b\[[?][0-9;]*[lh]"
+)
 
-# â"€â"€ In-memory sessions â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-# {chat_id: {"repo", "repo_context", "messages", "refined_prompt"}}
-sessions: dict[int, dict] = {}
-
-# â"€â"€ System prompt â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-SYSTEM_PROMPT = """\
-Eres un asistente especializado en refinar tareas de desarrollo de software.
-
-Contexto del repositorio objetivo ({repo}):
---- README ---
-{readme}
---- ÃRBOL DE ARCHIVOS ---
-{tree}
---- FIN DEL CONTEXTO ---
-
-Tu objetivo es ayudar al usuario a definir claramente una tarea de desarrollo \
-para que un agente de cÃ³digo autÃ³nomo (Claude Code) pueda ejecutarla sin ambigÃ¼edades.
-
-Proceso:
-1. Analiza la idea del usuario en el contexto del repositorio.
-2. Haz UNA sola pregunta de clarificaciÃ³n a la vez. MÃ¡ximo 3 rondas en total.
-3. Cuando tengas suficiente informaciÃ³n â€" o tras la tercera respuesta del usuario â€", \
-genera el prompt final.
-
-Cuando estÃ©s listo, responde EXACTAMENTE con este formato y nada mÃ¡s fuera de Ã©l:
-
-<prompt_final>
-[Prompt detallado y accionable para Claude Code. Incluye: quÃ© hacer, archivos \
-relevantes, comportamiento esperado, restricciones importantes.]
-</prompt_final>
-
-Hasta ese momento, solo haz preguntas. Una por mensaje. Sin cÃ³digo, sin implementaciones.\
-"""
+MAX_MSG = 3500          # Telegram message char limit with breathing room
+KEEPALIVE_SECS = 30     # Send "still working" after this many idle seconds
+FLUSH_INTERVAL = 2.0    # Seconds between output flushes to Telegram
+FLUSH_SIZE = 500        # Bytes before forcing a flush
 
 
-# â"€â"€ Helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-def _fresh_session(
-    repo: str | None = None,
-    repo_context: dict | None = None,
-    rama_activa: str | None = None,
-    pending_pr: bool = False,
-) -> dict:
+# ── Projects ──────────────────────────────────────────────────────────────────
+def load_projects() -> dict[str, str]:
+    try:
+        return json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_projects(projects: dict[str, str]) -> None:
+    PROJECTS_FILE.write_text(json.dumps(projects, indent=2), encoding="utf-8")
+
+
+# ── Session state (per chat_id) ───────────────────────────────────────────────
+def _blank_state() -> dict:
     return {
-        "repo": repo,
-        "repo_context": repo_context,
-        "messages": [],
-        "refined_prompt": None,
-        "rama_activa": rama_activa,
-        "pending_pr": pending_pr,
-        "repo_options": [],
-        "repo_page": 0,
+        "cwd": INITIAL_DIR,
+        "session_active": False,
+        "proc": None,           # asyncio.subprocess.Process
+        "master_fd": None,      # PTY master fd (Unix only)
+        "output_task": None,    # asyncio.Task
+        "keepalive_task": None, # asyncio.Task
+        "pending_confirm": None,  # blocked prompt awaiting explicit YES
     }
 
 
-def get_session(chat_id: int) -> dict:
-    if chat_id not in sessions:
-        sessions[chat_id] = _fresh_session()
-    return sessions[chat_id]
+_sessions: dict[int, dict] = {}
+
+
+def get_state(chat_id: int) -> dict:
+    if chat_id not in _sessions:
+        _sessions[chat_id] = _blank_state()
+    return _sessions[chat_id]
 
 
 def is_authorized(update: Update) -> bool:
     return update.effective_user.id == TELEGRAM_USER_ID
 
 
-def _repo_selector_text(repos: list[str], page: int) -> str:
-    total = len(repos)
-    total_pages = max(1, (total + REPOS_PER_PAGE - 1) // REPOS_PER_PAGE)
-    start = page * REPOS_PER_PAGE
-    end = min(start + REPOS_PER_PAGE, total)
-    lines = [
-        "En que repo quieres trabajar?",
-        f"Pagina {page + 1}/{total_pages} ({total} repos visibles)",
-        "",
-    ]
-    for idx in range(start, end):
-        lines.append(f"{idx + 1}. {repos[idx]}")
-    lines.extend(
-        [
-            "",
-            "Selecciona un repo con los botones, o escribe `/repo owner/nombre`.",
-            "Tambien puedes responder con un numero de la lista.",
-        ]
-    )
-    return "\n".join(lines)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
 
 
-def _repo_selector_markup(repos: list[str], page: int) -> InlineKeyboardMarkup:
-    start = page * REPOS_PER_PAGE
-    end = min(start + REPOS_PER_PAGE, len(repos))
-    rows: list[list[InlineKeyboardButton]] = []
-    for idx in range(start, end):
-        rows.append([InlineKeyboardButton(repos[idx], callback_data=f"repo_pick:{idx}")])
-
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("<<", callback_data=f"repo_page:{page - 1}"))
-    if end < len(repos):
-        nav.append(InlineKeyboardButton(">>", callback_data=f"repo_page:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    return InlineKeyboardMarkup(rows)
+def is_blocked(text: str) -> bool:
+    return any(p.search(text) for p in BLOCKLIST)
 
 
-async def list_available_repos(limit: int = 200) -> list[str]:
-    headers = {
-        "Authorization": f"Bearer {GH_PAT}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    params = {
-        "per_page": 100,
-        "sort": "updated",
-        "direction": "desc",
-        "affiliation": "owner,collaborator,organization_member",
-    }
-    repos: list[str] = []
-    page = 1
-
-    async with httpx.AsyncClient(timeout=20) as client:
-        while len(repos) < limit:
-            r = await client.get(
-                "https://api.github.com/user/repos",
-                headers=headers,
-                params={**params, "page": page},
-            )
-            if r.status_code != 200:
-                raise RuntimeError(f"No se pudieron listar repos: {r.status_code} - {r.text}")
-            batch = r.json()
-            if not batch:
-                break
-            repos.extend(
-                item["full_name"]
-                for item in batch
-                if isinstance(item, dict) and "full_name" in item
-            )
-            if len(batch) < 100:
-                break
-            page += 1
-
-    return repos[:limit]
+def audit(chat_id: int, text: str) -> None:
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with AUDIT_LOG.open("a", encoding="utf-8") as f:
+            f.write(f"[{ts}] chat={chat_id} | {text[:500]}\n")
+    except Exception:
+        pass
 
 
-async def configure_repo_session(chat_id: int, repo: str) -> None:
-    owner, repo_name = repo.split("/", 1)
-    readme, tree = await fetch_repo_context(owner, repo_name)
-    sessions[chat_id] = _fresh_session(
-        repo=repo,
-        repo_context={"readme": readme, "tree": tree},
-    )
-
-
-async def fetch_repo_context(owner: str, repo: str) -> tuple[str, str]:
-    """Returns (readme, file_tree) from the GitHub API."""
-    headers = {
-        "Authorization": f"Bearer {GH_PAT}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        # README
-        try:
-            r = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/readme",
-                headers={**headers, "Accept": "application/vnd.github.raw+json"},
-            )
-            readme = r.text[:3000] if r.status_code == 200 else "(sin README)"
-        except Exception:
-            readme = "(error al obtener README)"
-
-        # File tree (blobs only, up to 200 entries)
-        try:
-            r = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1",
-                headers=headers,
-            )
-            if r.status_code == 200:
-                paths = [
-                    item["path"]
-                    for item in r.json().get("tree", [])
-                    if item["type"] == "blob"
-                ]
-                tree = "\n".join(paths[:200])
-            else:
-                tree = "(sin Ã¡rbol de archivos)"
-        except Exception:
-            tree = "(error al obtener Ã¡rbol)"
-
-    return readme, tree
-
-
-async def trigger_workflow(
-    chat_id: int,
-    prompt: str,
-    repo: str,
-    rama_existente: str | None = None,
-    abrir_pr: bool = False,
-) -> tuple[str, str]:
-    """Fires workflow_dispatch. Returns (run_url, branch_name)."""
-    from datetime import datetime
-    branch = rama_existente or f"agent/{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
-
-    headers = {
-        "Authorization": f"Bearer {GH_PAT}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    payload = {
-        "ref": "main",
-        "inputs": {
-            "prompt": prompt,
-            "repo_objetivo": repo,
-            "rama_base": RAMA_BASE,
-            "chat_id": str(chat_id),
-            "rama_existente": rama_existente or "",
-            "abrir_pr": "true" if abrir_pr else "false",
-        },
-    }
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        dispatch_url = (
-            f"https://api.github.com/repos/{WORKFLOW_REPO_OWNER}/{WORKFLOW_REPO_NAME}"
-            f"/actions/workflows/agente.yml/dispatches"
+async def send_chunk(bot, chat_id: int, text: str) -> None:
+    """Send text as a Markdown code block, truncating if needed."""
+    clean = strip_ansi(text).strip()
+    if not clean:
+        return
+    if len(clean) > MAX_MSG:
+        clean = clean[:MAX_MSG] + "\n\n_(output truncated — ask Claude to summarize)_"
+    try:
+        await bot.send_message(
+            chat_id,
+            f"```\n{clean}\n```",
+            parse_mode="Markdown",
         )
-        r = await client.post(
-            dispatch_url,
-            headers=headers,
-            json=payload,
-        )
+    except Exception as e:
+        logger.warning("send_chunk error for chat %s: %s", chat_id, e)
 
-        # Backward compatibility: some deployed workflow files may not yet
-        # declare newer inputs like rama_existente / abrir_pr.
-        if r.status_code == 422:
+
+# ── Output reader ─────────────────────────────────────────────────────────────
+async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stream Claude Code output to Telegram until the process exits."""
+    s = get_state(chat_id)
+    proc: asyncio.subprocess.Process = s["proc"]
+    master_fd: int | None = s["master_fd"]
+    bot = context.bot
+    loop = asyncio.get_running_loop()
+
+    buffer = ""
+    last_flush = loop.time()
+
+    async def _flush():
+        nonlocal buffer, last_flush
+        if buffer:
+            await send_chunk(bot, chat_id, buffer)
+            buffer = ""
+        last_flush = loop.time()
+
+    try:
+        if master_fd is not None:
+            # ── Unix PTY: thread reads master_fd, puts bytes in queue ──────
+            queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+            def _pty_thread():
+                import select as _sel
+                try:
+                    while True:
+                        r, _, _ = _sel.select([master_fd], [], [], 1.0)
+                        if r:
+                            try:
+                                data = os.read(master_fd, 4096)
+                            except OSError:
+                                break
+                            if not data:
+                                break
+                            loop.call_soon_threadsafe(queue.put_nowait, data)
+                        elif proc.returncode is not None:
+                            break
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+
+            threading.Thread(target=_pty_thread, daemon=True).start()
+
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=FLUSH_INTERVAL)
+                except asyncio.TimeoutError:
+                    # Periodic flush
+                    await _flush()
+                    continue
+
+                if item is None:
+                    break
+                buffer += item.decode("utf-8", errors="replace")
+
+                now = loop.time()
+                if len(buffer) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
+                    await _flush()
+
+        else:
+            # ── Pipe mode (Windows or PTY fallback) ───────────────────────
+            while True:
+                try:
+                    data = await asyncio.wait_for(proc.stdout.read(4096), timeout=FLUSH_INTERVAL)
+                    if not data:   # EOF
+                        break
+                    buffer += data.decode("utf-8", errors="replace")
+                except asyncio.TimeoutError:
+                    # No data in the flush window; check if process ended
+                    if proc.returncode is not None:
+                        break
+
+                now = loop.time()
+                if len(buffer) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
+                    await _flush()
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error("output_reader error for chat %s: %s", chat_id, e)
+    finally:
+        await _flush()
+
+        # Mark session as ended
+        s["session_active"] = False
+        s["proc"] = None
+
+        if master_fd is not None:
             try:
-                message = str(r.json().get("message", ""))
+                os.close(master_fd)
+            except OSError:
+                pass
+            s["master_fd"] = None
+
+        if s.get("keepalive_task") and not s["keepalive_task"].done():
+            s["keepalive_task"].cancel()
+
+        try:
+            await bot.send_message(
+                chat_id,
+                "✅ Session ended. Send a new task or /cd to change directory.",
+            )
+        except Exception:
+            pass
+
+
+async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Periodically remind the user Claude Code is still running."""
+    try:
+        while True:
+            await asyncio.sleep(KEEPALIVE_SECS)
+            if not get_state(chat_id)["session_active"]:
+                break
+            try:
+                await context.bot.send_message(chat_id, "⏳ Still working...")
             except Exception:
-                message = r.text or ""
+                pass
+    except asyncio.CancelledError:
+        pass
 
-            if "Unexpected inputs provided" in message:
-                match = re.search(r"Unexpected inputs provided:\s*\[(.*?)\]", message)
-                unsupported: set[str] = set()
-                if match:
-                    unsupported = {
-                        item.strip().strip('"\'')
-                        for item in match.group(1).split(",")
-                        if item.strip()
-                    }
 
-                if unsupported:
-                    retry_inputs = {
-                        key: value
-                        for key, value in payload["inputs"].items()
-                        if key not in unsupported
-                    }
-                    r = await client.post(
-                        dispatch_url,
-                        headers=headers,
-                        json={"ref": "main", "inputs": retry_inputs},
-                    )
+# ── Spawn Claude Code ─────────────────────────────────────────────────────────
+async def spawn_claude(
+    chat_id: int, prompt: str, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Spawn claude --dangerously-skip-permissions and wire it to Telegram."""
+    s = get_state(chat_id)
+    cwd = s["cwd"]
 
-        if r.status_code not in (200, 204):
-            raise RuntimeError(f"workflow_dispatch fallo: {r.status_code} - {r.text}")
+    cmd = ["claude", "--dangerously-skip-permissions"]
+    if RESTRICT_PATHS:
+        cmd += ["--allowedPaths", cwd]
 
-        await asyncio.sleep(3)
-        r2 = await client.get(
-            f"https://api.github.com/repos/{WORKFLOW_REPO_OWNER}/{WORKFLOW_REPO_NAME}"
-            f"/actions/runs?per_page=1",
-            headers=headers,
+    master_fd: int | None = None
+
+    # ── Try PTY on Unix ────────────────────────────────────────────────────
+    if not IS_WINDOWS:
+        try:
+            import pty
+            master, slave = pty.openpty()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                cwd=cwd,
+                env={
+                    **os.environ,
+                    "TERM": "xterm-256color",
+                    "COLUMNS": "160",
+                    "LINES": "50",
+                },
+            )
+            os.close(slave)
+            master_fd = master
+        except Exception as e:
+            logger.warning("PTY spawn failed (%s) — falling back to pipes", e)
+            master_fd = None
+
+    # ── Pipe fallback (Windows or PTY failure) ─────────────────────────────
+    if master_fd is None:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd,
         )
-        runs = r2.json().get("workflow_runs", [])
-        run_url = (
-            runs[0]["html_url"]
-            if runs
-            else f"https://github.com/{WORKFLOW_REPO_OWNER}/{WORKFLOW_REPO_NAME}/actions"
-        )
 
-    return run_url, branch
+    s["proc"] = proc
+    s["master_fd"] = master_fd
+    s["session_active"] = True
+
+    # Send the initial prompt
+    prompt_bytes = (prompt + "\n").encode()
+    if master_fd is not None:
+        os.write(master_fd, prompt_bytes)
+    else:
+        proc.stdin.write(prompt_bytes)
+        await proc.stdin.drain()
+
+    loop = asyncio.get_running_loop()
+    s["output_task"] = loop.create_task(_output_reader(chat_id, context))
+    s["keepalive_task"] = loop.create_task(_keepalive(chat_id, context))
 
 
-# â"€â"€ Command handlers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+# ── Relay user input to Claude Code stdin ────────────────────────────────────
+async def relay_input(chat_id: int, text: str) -> None:
+    s = get_state(chat_id)
+    data = (text + "\n").encode()
+    try:
+        if s["master_fd"] is not None:
+            os.write(s["master_fd"], data)
+        elif s["proc"] and s["proc"].stdin:
+            s["proc"].stdin.write(data)
+            await s["proc"].stdin.drain()
+    except OSError as e:
+        logger.error("relay_input error: %s", e)
+
+
+# ── Command handlers ──────────────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
+    s = get_state(update.effective_chat.id)
     await update.message.reply_text(
-        "*Mobile Coding Agent*\n\n"
-        "Comandos:\n"
-        "- `/repo` - Lista y selecciona repos disponibles\n"
-        "- `/repo owner/nombre` - Establece el repositorio objetivo\n"
-        "- Escribe tu idea - Inicia el refinamiento\n"
-        "- `/rama` - Ver rama activa (los mensajes se acumulan en la misma rama)\n"
-        "- `/rama nueva` - Empezar en una rama nueva\n"
-        "- `/pr` - La proxima ejecucion abre o reutiliza el PR de la rama activa\n"
-        "- `/cancelar` - Resetea la conversacion actual\n\n"
-        "Empieza con `/repo` para configurar el repositorio.",
+        "*Claude Code Companion*\n\n"
+        f"Directory: `{s['cwd']}`\n\n"
+        "*Commands:*\n"
+        "• `/cd <path|name>` — change working directory\n"
+        "• `/projects` — list saved projects (tap to switch)\n"
+        "• `/save <name>` — save current dir as a named project\n"
+        "• `/status` — show current dir + session state\n"
+        "• `/stop` — interrupt Claude Code (Ctrl+C)\n"
+        "• `/reset` — kill session, start fresh\n\n"
+        "Send any task description and Claude Code starts! 🚀",
         parse_mode="Markdown",
     )
 
-async def cmd_repo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
+    s = get_state(update.effective_chat.id)
+    icon = "🟢 Active" if s["session_active"] else "⚫ Idle"
+    await update.message.reply_text(
+        f"*Status*\n"
+        f"Directory: `{s['cwd']}`\n"
+        f"Session: {icon}",
+        parse_mode="Markdown",
+    )
 
-    chat_id = update.effective_chat.id
-    s = get_session(chat_id)
-    args = context.args
 
-    if not args:
-        loading = await update.message.reply_text("Listando repos disponibles...")
-        try:
-            repos = await list_available_repos()
-        except Exception as e:
-            await loading.edit_text(f"Error al listar repos: {e}")
-            return
-        if not repos:
-            await loading.edit_text(
-                "No encontre repos visibles con este GH_PAT.\n"
-                "Tambien puedes enviarme `/repo owner/nombre`.",
-                parse_mode="Markdown",
-            )
-            return
-        s["repo_options"] = repos
-        s["repo_page"] = 0
-        await loading.edit_text(
-            _repo_selector_text(repos, 0),
-            reply_markup=_repo_selector_markup(repos, 0),
+async def cmd_cd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/cd <path or project name>`", parse_mode="Markdown"
         )
         return
-
-    candidate = args[0].strip()
-    if candidate.isdigit() and s.get("repo_options"):
-        idx = int(candidate) - 1
-        repos = s["repo_options"]
-        if 0 <= idx < len(repos):
-            candidate = repos[idx]
-        else:
-            await update.message.reply_text("Ese numero no existe en la lista actual.")
-            return
-
-    if "/" not in candidate:
+    arg = " ".join(context.args)
+    projects = load_projects()
+    # Saved name takes priority; fall back to literal/expanded path
+    target = projects.get(arg) or os.path.expanduser(arg)
+    if not os.path.isdir(target):
         await update.message.reply_text(
-            "Uso: `/repo` para listar o `/repo owner/nombre-repo` para seleccionar.",
+            f"Directory not found: `{target}`", parse_mode="Markdown"
+        )
+        return
+    get_state(update.effective_chat.id)["cwd"] = target
+    await update.message.reply_text(f"Now in: `{target}`", parse_mode="Markdown")
+
+
+async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    projects = load_projects()
+    if not projects:
+        await update.message.reply_text(
+            "No saved projects yet.\nUse `/save <name>` to save the current directory.",
             parse_mode="Markdown",
         )
         return
-
-    msg = await update.message.reply_text(
-        f"Obteniendo contexto de `{candidate}`...", parse_mode="Markdown"
+    keyboard = [
+        [InlineKeyboardButton(f"📁 {name}", callback_data=f"cd:{name}")]
+        for name in projects
+    ]
+    lines = "\n".join(f"• `{n}` → `{p}`" for n, p in projects.items())
+    await update.message.reply_text(
+        f"*Saved Projects:*\n{lines}",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+async def cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/save <name>`", parse_mode="Markdown")
+        return
+    name = context.args[0]
+    s = get_state(update.effective_chat.id)
+    projects = load_projects()
+    projects[name] = s["cwd"]
+    save_projects(projects)
+    await update.message.reply_text(
+        f"Saved `{name}` → `{s['cwd']}`", parse_mode="Markdown"
+    )
+
+
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    s = get_state(update.effective_chat.id)
+    if not s["session_active"] or s["proc"] is None:
+        await update.message.reply_text("No active session to stop.")
+        return
     try:
-        await configure_repo_session(chat_id, candidate)
+        if s["master_fd"] is not None:
+            os.write(s["master_fd"], b"\x03")  # Ctrl+C over PTY
+        elif IS_WINDOWS:
+            s["proc"].terminate()
+        else:
+            s["proc"].send_signal(signal.SIGINT)
+        await update.message.reply_text("Sent interrupt to Claude Code.")
     except Exception as e:
-        await msg.edit_text(f"Error al acceder al repo: {e}")
-        return
+        await update.message.reply_text(f"Error sending interrupt: {e}")
 
-    await msg.edit_text(
-        f"Repositorio configurado: `{candidate}`\n\nAhora dime que quieres implementar.",
-        parse_mode="Markdown",
-    )
 
-async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
-    s = get_session(update.effective_chat.id)
-    sessions[update.effective_chat.id] = _fresh_session(
-        repo=s["repo"],
-        repo_context=s["repo_context"],
-        rama_activa=s.get("rama_activa"),
-        pending_pr=False,
-    )
-    await update.message.reply_text(
-        "ConversaciÃ³n reseteada. Dime quÃ© quieres implementar."
-    )
+    s = get_state(update.effective_chat.id)
+    cwd = s["cwd"]  # preserve current directory
+
+    if s["proc"]:
+        try:
+            s["proc"].kill()
+        except Exception:
+            pass
+    for task in (s.get("output_task"), s.get("keepalive_task")):
+        if task and not task.done():
+            task.cancel()
+
+    _sessions[update.effective_chat.id] = _blank_state()
+    _sessions[update.effective_chat.id]["cwd"] = cwd
+    await update.message.reply_text("Session reset. Ready for a new task.")
 
 
-async def cmd_rama(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_authorized(update):
-        return
-    s = get_session(update.effective_chat.id)
-    rama = s.get("rama_activa")
-    pending_pr = s.get("pending_pr", False)
-    if context.args and context.args[0] == "nueva":
-        sessions[update.effective_chat.id]["rama_activa"] = None
-        sessions[update.effective_chat.id]["pending_pr"] = False
-        await update.message.reply_text("Rama reseteada. El prÃ³ximo workflow crearÃ¡ una rama nueva.")
-    elif rama:
-        pr_line = "\nCierre pendiente: `/pr` activado." if pending_pr else ""
-        await update.message.reply_text(
-            f"Rama activa: `{rama}`\n\nEl prÃ³ximo mensaje seguirÃ¡ en esta rama.\n"
-            f"Usa `/rama nueva` para empezar en una rama nueva.{pr_line}",
-            parse_mode="Markdown",
-        )
-    else:
-        await update.message.reply_text("No hay rama activa. El prÃ³ximo workflow crearÃ¡ una nueva.")
-
-
-async def cmd_pr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_authorized(update):
-        return
-    s = get_session(update.effective_chat.id)
-    if not s["repo"]:
-        await update.message.reply_text(
-            "Primero configura el repositorio con `/repo owner/nombre`",
-            parse_mode="Markdown",
-        )
-        return
-    sessions[update.effective_chat.id]["pending_pr"] = True
-    rama = s.get("rama_activa")
-    if rama:
-        await update.message.reply_text(
-            f"âœ... Cierre con PR activado.\nLa prÃ³xima ejecuciÃ³n trabajarÃ¡ en `{rama}` y abrirÃ¡/reutilizarÃ¡ el PR.",
-            parse_mode="Markdown",
-        )
-    else:
-        await update.message.reply_text(
-            "âœ... Cierre con PR activado.\nLa prÃ³xima ejecuciÃ³n crearÃ¡ una rama y abrirÃ¡ PR.",
-        )
-
-
-# â"€â"€ Message handler â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+# ── Message handler ───────────────────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
-
     chat_id = update.effective_chat.id
-    s = get_session(chat_id)
-    user_text = (update.message.text or "").strip()
-
-    if not s["repo"]:
-        candidate: str | None = None
-
-        if user_text.isdigit() and s.get("repo_options"):
-            idx = int(user_text) - 1
-            repos = s["repo_options"]
-            if 0 <= idx < len(repos):
-                candidate = repos[idx]
-            else:
-                await update.message.reply_text("Ese numero no existe en la lista actual.")
-                return
-        elif "/" in user_text and " " not in user_text:
-            candidate = user_text
-
-        if candidate:
-            msg = await update.message.reply_text(
-                f"Obteniendo contexto de `{candidate}`...", parse_mode="Markdown"
-            )
-            try:
-                await configure_repo_session(chat_id, candidate)
-            except Exception as e:
-                await msg.edit_text(f"Error al acceder al repo: {e}")
-                return
-            await msg.edit_text(
-                f"Repositorio configurado: `{candidate}`\n\nAhora dime que quieres implementar.",
-                parse_mode="Markdown",
-            )
-            return
-
-        loading = await update.message.reply_text("Necesito que me digas en que repo trabajamos. Listando repos...")
-        try:
-            repos = await list_available_repos()
-        except Exception as e:
-            await loading.edit_text(f"Error al listar repos: {e}\nUsa `/repo owner/nombre`.", parse_mode="Markdown")
-            return
-
-        if not repos:
-            await loading.edit_text(
-                "No encontre repos visibles con este GH_PAT.\n"
-                "Usa `/repo owner/nombre`.",
-                parse_mode="Markdown",
-            )
-            return
-
-        s["repo_options"] = repos
-        s["repo_page"] = 0
-        await loading.edit_text(
-            _repo_selector_text(repos, 0),
-            reply_markup=_repo_selector_markup(repos, 0),
-        )
+    s = get_state(chat_id)
+    text = (update.message.text or "").strip()
+    if not text:
         return
 
-    if s["refined_prompt"]:
+    # ── Blocked-pattern confirmation pending ──────────────────────────────
+    if s["pending_confirm"]:
+        if text.strip().upper() == "YES":
+            prompt = s["pending_confirm"]
+            s["pending_confirm"] = None
+            audit(chat_id, f"CONFIRMED_BLOCKED: {prompt}")
+            await _run_task(chat_id, prompt, context, update)
+        else:
+            s["pending_confirm"] = None
+            await update.message.reply_text("Cancelled.")
+        return
+
+    # ── Active session: relay input to Claude Code ────────────────────────
+    if s["session_active"] and s["proc"]:
+        await relay_input(chat_id, text)
+        return
+
+    # ── New task ──────────────────────────────────────────────────────────
+    audit(chat_id, f"PROMPT: {text}")
+    if is_blocked(text):
+        s["pending_confirm"] = text
         await update.message.reply_text(
-            "Hay un prompt pendiente de ejecutar. "
-            "Usa el boton Ejecutar para continuar o Cancelar para descartarlo."
-        )
-        return
-
-    s["messages"].append({"role": "user", "content": update.message.text})
-
-    ctx = s["repo_context"]
-    system = SYSTEM_PROMPT.format(
-        repo=s["repo"],
-        readme=ctx["readme"],
-        tree=ctx["tree"],
-    )
-
-    placeholder = await update.message.reply_text("Escribiendo...")
-    try:
-        response = await anthropic.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=1024,
-            system=system,
-            messages=s["messages"],
-        )
-        reply = response.content[0].text
-    except Exception as e:
-        await placeholder.edit_text(f"Error Anthropic: {e}")
-        return
-
-    s["messages"].append({"role": "assistant", "content": reply})
-
-    if "<prompt_final>" in reply and "</prompt_final>" in reply:
-        start = reply.index("<prompt_final>") + len("<prompt_final>")
-        end = reply.index("</prompt_final>")
-        refined = reply[start:end].strip()
-        s["refined_prompt"] = refined
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Ejecutar", callback_data="ejecutar"),
-                InlineKeyboardButton("Cancelar", callback_data="cancelar"),
-            ]
-        ])
-        await placeholder.edit_text(
-            f"Prompt generado:\n\n```\n{refined}\n```\n\nEjecutamos esto?",
+            "⚠️ *Blocked pattern detected*\n\n"
+            "Your prompt matches a potentially destructive pattern.\n"
+            "Reply `YES` to proceed anyway, or anything else to cancel.",
             parse_mode="Markdown",
-            reply_markup=keyboard,
         )
-    else:
-        await placeholder.edit_text(reply)
+        return
 
-# â"€â"€ Callback handler (inline buttons) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    await _run_task(chat_id, text, context, update)
+
+
+async def _run_task(
+    chat_id: int,
+    prompt: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+) -> None:
+    s = get_state(chat_id)
+    msg = await update.message.reply_text(
+        f"Starting Claude Code in `{s['cwd']}`...", parse_mode="Markdown"
+    )
+    try:
+        await spawn_claude(chat_id, prompt, context)
+        await msg.edit_text(
+            f"Claude Code running in `{s['cwd']}`.\n"
+            "Output streams below. `/stop` to interrupt, `/reset` to kill.",
+            parse_mode="Markdown",
+        )
+    except FileNotFoundError:
+        await msg.edit_text(
+            "❌ `claude` command not found.\n"
+            "Install Claude Code and make sure it's in your PATH.",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Failed to start Claude Code: {e}")
+
+
+# ── Callback handler (inline buttons) ────────────────────────────────────────
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-
     if update.effective_user.id != TELEGRAM_USER_ID:
         return
-
     chat_id = update.effective_chat.id
-    s = get_session(chat_id)
 
-    if query.data.startswith("repo_page:"):
-        try:
-            page = int(query.data.split(":", 1)[1])
-        except Exception:
-            await query.edit_message_text("No pude leer la pagina de repos.")
-            return
-
-        repos = s.get("repo_options") or []
-        if not repos:
-            try:
-                repos = await list_available_repos()
-            except Exception as e:
-                await query.edit_message_text(f"Error al listar repos: {e}")
-                return
-            s["repo_options"] = repos
-
-        if not repos:
-            await query.edit_message_text("No hay repos visibles para seleccionar.")
-            return
-
-        max_page = max(0, (len(repos) - 1) // REPOS_PER_PAGE)
-        page = max(0, min(page, max_page))
-        s["repo_page"] = page
-        await query.edit_message_text(
-            _repo_selector_text(repos, page),
-            reply_markup=_repo_selector_markup(repos, page),
-        )
-        return
-
-    if query.data.startswith("repo_pick:"):
-        try:
-            idx = int(query.data.split(":", 1)[1])
-        except Exception:
-            await query.edit_message_text("No pude leer el repo seleccionado.")
-            return
-
-        repos = s.get("repo_options") or []
-        if not repos or idx < 0 or idx >= len(repos):
-            await query.edit_message_text("Ese repo ya no esta disponible. Usa /repo para listar de nuevo.")
-            return
-
-        selected = repos[idx]
-        await query.edit_message_text(
-            f"Obteniendo contexto de `{selected}`...", parse_mode="Markdown"
-        )
-        try:
-            await configure_repo_session(chat_id, selected)
-        except Exception as e:
-            await query.edit_message_text(f"Error al acceder al repo: {e}")
-            return
-
-        await query.edit_message_text(
-            f"Repositorio configurado: `{selected}`\n\nAhora dime que quieres implementar.",
-            parse_mode="Markdown",
-        )
-        return
-
-    if query.data == "cancelar":
-        sessions[chat_id] = _fresh_session(
-            repo=s["repo"],
-            repo_context=s["repo_context"],
-            rama_activa=s.get("rama_activa"),
-            pending_pr=s.get("pending_pr", False),
-        )
-        await query.edit_message_text("Cancelado. Dime que quieres implementar.")
-        return
-
-    if query.data == "ejecutar":
-        if not s["refined_prompt"]:
-            await query.edit_message_text("No hay prompt para ejecutar.")
-            return
-
-        await query.edit_message_text("Disparando workflow...")
-        abrir_pr = bool(s.get("pending_pr", False))
-        try:
-            run_url, branch = await trigger_workflow(
-                chat_id=chat_id,
-                prompt=s["refined_prompt"],
-                repo=s["repo"],
-                rama_existente=s.get("rama_activa"),
-                abrir_pr=abrir_pr,
+    if query.data.startswith("cd:"):
+        name = query.data[3:]
+        projects = load_projects()
+        path = projects.get(name)
+        if not path:
+            await query.edit_message_text(
+                f"Project `{name}` not found.", parse_mode="Markdown"
             )
-        except Exception as e:
-            await query.edit_message_text(f"Error al disparar el workflow: {e}")
             return
+        if not os.path.isdir(path):
+            await query.edit_message_text(
+                f"Directory not found: `{path}`\nUpdate it with `/save {name}`.",
+                parse_mode="Markdown",
+            )
+            return
+        get_state(chat_id)["cwd"] = path
+        await query.edit_message_text(f"Now in: `{path}`", parse_mode="Markdown")
 
-        sessions[chat_id] = _fresh_session(
-            repo=s["repo"],
-            repo_context=s["repo_context"],
-            rama_activa=branch,
-            pending_pr=False,
-        )
-        cierre_line = "\nModo cierre: este run abrira/reutilizara PR." if abrir_pr else ""
-        await query.edit_message_text(
-            f"Workflow en marcha.\n\n"
-            f"Siguelo aqui:\n{run_url}\n\n"
-            f"Rama: `{branch}`\n"
-            f"Te aviso cuando termine. El siguiente mensaje seguira en esta rama.{cierre_line}",
-            parse_mode="Markdown",
-        )
 
-# â"€â"€ Entry point â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+# ── Entry point ───────────────────────────────────────────────────────────────
 def main() -> None:
     asyncio.set_event_loop(asyncio.new_event_loop())
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("repo", cmd_repo))
-    app.add_handler(CommandHandler("cancelar", cmd_cancelar))
-    app.add_handler(CommandHandler("rama", cmd_rama))
-    app.add_handler(CommandHandler("pr", cmd_pr))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("cd", cmd_cd))
+    app.add_handler(CommandHandler("projects", cmd_projects))
+    app.add_handler(CommandHandler("save", cmd_save))
+    app.add_handler(CommandHandler("stop", cmd_stop))
+    app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Bot iniciado")
-    app.run_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
+
+    logger.info(
+        "Claude Code Companion (local-mode) started. Authorized user: %s",
+        TELEGRAM_USER_ID,
+    )
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"],
+    )
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
