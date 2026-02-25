@@ -1,10 +1,9 @@
 """Claude Code Companion — local-mode bot.
 
-Telegram <-> Claude Code interactive PTY bridge.
+Telegram <-> Claude Code non-interactive bridge (text mode).
 
-You (Telegram) ──► Claude Code (interactive, on your machine) ──► your project
-Claude Code output/questions ──► Telegram
-Your replies ──► Claude Code stdin
+You (Telegram) ──► claude -p "prompt" --output-format text
+Claude Code output ──► Telegram (raw text chunks flushed every 2 seconds)
 """
 
 import asyncio
@@ -12,10 +11,6 @@ import json
 import logging
 import os
 import re
-import signal
-import sys
-import threading
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -40,7 +35,6 @@ INITIAL_DIR = str(BASE_DIR)
 RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
 _extra_blocked = os.environ.get("BLOCKED_PATTERNS", "")
 EXTRA_BLOCKED = [p.strip() for p in _extra_blocked.split(",") if p.strip()]
-IS_WINDOWS = sys.platform == "win32"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_DIR = Path.home() / ".claude_code_bot"
@@ -91,8 +85,6 @@ MAX_MSG = 3500          # Telegram message char limit with breathing room
 KEEPALIVE_SECS = 30     # Send "still working" after this many idle seconds
 FLUSH_INTERVAL = 2.0    # Seconds between output flushes to Telegram
 FLUSH_SIZE = 500        # Bytes before forcing a flush
-SUMMARY_INTERVAL = 300  # seconds between periodic status summaries (5 min)
-SUMMARY_CHARS = 4000    # chars of recent output to send to the API
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
@@ -133,12 +125,10 @@ def _blank_state() -> dict:
         "cwd": INITIAL_DIR,
         "session_active": False,
         "proc": None,           # asyncio.subprocess.Process
-        "master_fd": None,      # PTY master fd (Unix only)
         "output_task": None,    # asyncio.Task
         "keepalive_task": None, # asyncio.Task
         "pending_confirm": None,  # blocked prompt awaiting explicit YES
-        "output_buffer": "",    # rolling tail of recent stripped output for summaries
-        "pty_proc": None,       # winpty PtyProcess (Windows ConPTY)
+        "session_id": None,     # Claude session ID for --resume; None = fresh
     }
 
 
@@ -175,371 +165,155 @@ def audit(chat_id: int, text: str) -> None:
 
 
 async def send_chunk(bot, chat_id: int, text: str) -> None:
-    """Send text as a Markdown code block, truncating if needed."""
     clean = strip_ansi(text).strip()
     if not clean:
         return
     if len(clean) > MAX_MSG:
-        clean = clean[:MAX_MSG] + "\n\n_(output truncated — ask Claude to summarize)_"
+        clean = clean[:MAX_MSG] + "\n\n_(truncated)_"
     try:
-        await bot.send_message(
-            chat_id,
-            f"```\n{clean}\n```",
-            parse_mode="Markdown",
-        )
+        await bot.send_message(chat_id, clean)
     except Exception as e:
         logger.warning("send_chunk error for chat %s: %s", chat_id, e)
 
 
 # ── Output reader ─────────────────────────────────────────────────────────────
 async def _output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stream Claude Code output to Telegram until the process exits."""
+    """Stream Claude Code output (stream-json format) to Telegram until the process exits."""
     s = get_state(chat_id)
     proc: asyncio.subprocess.Process = s["proc"]
-    master_fd: int | None = s["master_fd"]
     bot = context.bot
     loop = asyncio.get_running_loop()
+    logger.info("output_reader[%s]: started (stream-json mode)", chat_id)
 
-    pty_proc = s.get("pty_proc")
-    mode = "winpty" if pty_proc else ("PTY" if master_fd else "pipe")
-    logger.info("output_reader[%s]: started (mode=%s)", chat_id, mode)
-
-    buffer = ""
+    text_buf = ""   # flushed to Telegram periodically
+    line_buf = ""   # accumulates bytes until newline
     last_flush = loop.time()
 
     async def _flush():
-        nonlocal buffer, last_flush
-        if buffer:
-            logger.debug("_flush[%s]: %d chars", chat_id, len(buffer))
-            s["output_buffer"] = (s["output_buffer"] + strip_ansi(buffer))[-SUMMARY_CHARS:]
-            await send_chunk(bot, chat_id, buffer)
-            buffer = ""
+        nonlocal text_buf, last_flush
+        if text_buf.strip():
+            await send_chunk(bot, chat_id, text_buf)
+            text_buf = ""
         last_flush = loop.time()
 
+    def _handle_line(raw: str) -> None:
+        nonlocal text_buf
+        raw = raw.strip()
+        if not raw:
+            return
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            text_buf += raw + "\n"   # not JSON — pass through as-is
+            return
+
+        obj_type = obj.get("type")
+        if obj_type == "assistant":
+            for block in obj.get("message", {}).get("content", []):
+                if block.get("type") == "text":
+                    text_buf += block["text"]
+        elif obj_type == "result":
+            sid = obj.get("session_id")
+            if sid:
+                s["session_id"] = sid
+                logger.info("output_reader[%s]: session_id captured: %s", chat_id, sid)
+            # "result" also carries the full final text; skip — we already
+            # streamed it incrementally via "assistant" messages above.
+        # other types (system, tool_use, tool_result…) are silently ignored
+
     try:
-        if pty_proc is not None:
-            # ── Windows ConPTY via pywinpty ────────────────────────────────
-            queue: asyncio.Queue[bytes | None] = asyncio.Queue()
-
-            def _winpty_thread():
-                try:
-                    while pty_proc.isalive():
-                        try:
-                            data = pty_proc.read(4096)
-                            if data:
-                                loop.call_soon_threadsafe(queue.put_nowait, data)
-                        except EOFError:
-                            break
-                        except Exception as e:
-                            logger.error("winpty read error for chat %s: %s", chat_id, e)
-                            break
-                finally:
-                    loop.call_soon_threadsafe(queue.put_nowait, None)
-
-            threading.Thread(target=_winpty_thread, daemon=True).start()
-
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=FLUSH_INTERVAL)
-                except asyncio.TimeoutError:
-                    await _flush()
-                    continue
-
-                if item is None:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=FLUSH_INTERVAL)
+            except asyncio.TimeoutError:
+                await _flush()
+                if proc.returncode is not None:
                     break
-                buffer += item.decode("utf-8", errors="replace")
+                continue
 
-                now = loop.time()
-                if len(buffer) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
-                    await _flush()
+            if not chunk:
+                logger.info("output_reader[%s]: EOF", chat_id)
+                break
 
-        elif master_fd is not None:
-            # ── Unix PTY: thread reads master_fd, puts bytes in queue ──────
-            queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+            decoded = chunk.decode("utf-8", errors="replace")
+            logger.info("output_reader[%s]: %d chars received", chat_id, len(decoded))
+            line_buf += decoded
 
-            def _pty_thread():
-                import select as _sel
-                try:
-                    while True:
-                        r, _, _ = _sel.select([master_fd], [], [], 1.0)
-                        if r:
-                            try:
-                                data = os.read(master_fd, 4096)
-                            except OSError:
-                                break
-                            if not data:
-                                break
-                            loop.call_soon_threadsafe(queue.put_nowait, data)
-                        elif proc.returncode is not None:
-                            break
-                finally:
-                    loop.call_soon_threadsafe(queue.put_nowait, None)
+            while "\n" in line_buf:
+                line, line_buf = line_buf.split("\n", 1)
+                _handle_line(line)
 
-            threading.Thread(target=_pty_thread, daemon=True).start()
-
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=FLUSH_INTERVAL)
-                except asyncio.TimeoutError:
-                    # Periodic flush
-                    await _flush()
-                    continue
-
-                if item is None:
-                    break
-                buffer += item.decode("utf-8", errors="replace")
-
-                now = loop.time()
-                if len(buffer) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
-                    await _flush()
-
-        else:
-            # ── Pipe mode (Windows or PTY fallback) ───────────────────────
-            while True:
-                try:
-                    data = await asyncio.wait_for(proc.stdout.read(4096), timeout=FLUSH_INTERVAL)
-                    if not data:   # EOF
-                        logger.info("output_reader[%s]: EOF on stdout", chat_id)
-                        break
-                    logger.debug("output_reader[%s]: got %d bytes", chat_id, len(data))
-                    buffer += data.decode("utf-8", errors="replace")
-                except asyncio.TimeoutError:
-                    # No data in the flush window; check if process ended
-                    logger.debug("output_reader[%s]: read timeout, returncode=%s", chat_id, proc.returncode)
-                    if proc.returncode is not None:
-                        break
-
-                now = loop.time()
-                if len(buffer) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
-                    await _flush()
+            now = loop.time()
+            if len(text_buf) >= FLUSH_SIZE or now - last_flush >= FLUSH_INTERVAL:
+                await _flush()
 
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        logger.error("output_reader error for chat %s: %s", chat_id, e)
+        logger.error("output_reader[%s] error: %s", chat_id, e)
     finally:
+        # flush any remaining line_buf content
+        if line_buf.strip():
+            _handle_line(line_buf)
         await _flush()
-
-        # Mark session as ended
         s["session_active"] = False
         s["proc"] = None
-
-        if s.get("pty_proc"):
-            try:
-                s["pty_proc"].terminate(force=True)
-            except Exception:
-                pass
-            s["pty_proc"] = None
-
-        if master_fd is not None:
-            try:
-                os.close(master_fd)
-            except OSError:
-                pass
-            s["master_fd"] = None
-
         if s.get("keepalive_task") and not s["keepalive_task"].done():
             s["keepalive_task"].cancel()
-
+        has_session = bool(s.get("session_id"))
+        hint = " Next message continues in context. /reset to start fresh." if has_session else ""
         try:
-            await bot.send_message(
-                chat_id,
-                "✅ Session ended. Send a new task or /cd to change directory.",
-            )
+            await bot.send_message(chat_id, f"✅ Done.{hint}")
         except Exception:
             pass
 
 
-async def _summarize_output(recent: str) -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    logger.info("_summarize_output: %d chars, api_key present=%s", len(recent), bool(api_key))
-    if api_key:
-        try:
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=api_key)
-            resp = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=120,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "This is recent terminal output from a Claude Code session "
-                        "(an AI coding assistant). In 1-2 sentences describe what it "
-                        "is currently doing or has just done. Be specific and brief:\n\n"
-                        + recent[-SUMMARY_CHARS:]
-                    ),
-                }],
-            )
-            result = resp.content[0].text.strip()
-            logger.info("_summarize_output: API ok, returned %d chars", len(result))
-            return result
-        except Exception as e:
-            logger.warning("_summarize_output: API call failed (%s), using fallback", e)
-    # Fallback: last 8 non-empty lines of raw output
-    lines = [l for l in recent.splitlines() if l.strip()][-8:]
-    logger.info("_summarize_output: fallback, %d lines", len(lines))
-    return "```\n" + "\n".join(lines) + "\n```"
-
-
-async def _send_summary(chat_id: int, bot, recent: str) -> None:
-    """Generate and send one status summary. Used by _keepalive."""
-    summary = await _summarize_output(recent)
-    logger.info("keepalive[%s]: sending summary (%d chars)", chat_id, len(summary))
-    try:
-        await bot.send_message(
-            chat_id,
-            f"📊 *Status update*\n{summary}",
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.warning("keepalive[%s]: Markdown send failed (%s), retrying plain", chat_id, e)
-        await bot.send_message(chat_id, f"📊 Status update\n{summary}")
-
-
 async def _keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Warn + first summary after KEEPALIVE_SECS, then summaries every SUMMARY_INTERVAL."""
     try:
-        # First nudge + immediate first summary
-        await asyncio.sleep(KEEPALIVE_SECS)
-        s = get_state(chat_id)
-        if not s["session_active"]:
-            logger.info("keepalive[%s]: session ended before nudge", chat_id)
-            return
-        logger.info("keepalive[%s]: sending nudge", chat_id)
-        await context.bot.send_message(chat_id, "⏳ Still working...")
-
-        recent = s.get("output_buffer", "").strip()
-        logger.info("keepalive[%s]: first summary check, buffer=%d chars", chat_id, len(recent))
-        if recent:
-            try:
-                await _send_summary(chat_id, context.bot, recent)
-            except Exception as e:
-                logger.warning("keepalive[%s]: first summary failed: %s", chat_id, e)
-        else:
-            logger.warning("keepalive[%s]: output_buffer empty at first check — no output from Claude Code yet", chat_id)
-
-        # Periodic summaries every SUMMARY_INTERVAL
         while True:
-            await asyncio.sleep(SUMMARY_INTERVAL)
+            await asyncio.sleep(KEEPALIVE_SECS)
             s = get_state(chat_id)
             if not s["session_active"]:
-                logger.info("keepalive[%s]: session ended, stopping", chat_id)
-                break
-            recent = s.get("output_buffer", "").strip()
-            logger.info("keepalive[%s]: summary tick, buffer=%d chars", chat_id, len(recent))
-            if not recent:
-                logger.warning("keepalive[%s]: output_buffer empty, skipping", chat_id)
-                continue
-            try:
-                await _send_summary(chat_id, context.bot, recent)
-            except Exception as e:
-                logger.warning("keepalive[%s]: summary failed: %s", chat_id, e)
+                return
+            await context.bot.send_message(chat_id, "⏳ Still working...")
     except asyncio.CancelledError:
-        logger.info("keepalive[%s]: cancelled", chat_id)
+        pass
 
 
 # ── Spawn Claude Code ─────────────────────────────────────────────────────────
 async def spawn_claude(
     chat_id: int, prompt: str, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Spawn claude --dangerously-skip-permissions and wire it to Telegram."""
+    """Spawn claude -p <prompt> --output-format stream-json and wire it to Telegram."""
     s = get_state(chat_id)
     cwd = s["cwd"]
 
-    cmd = ["claude", "--dangerously-skip-permissions"]
+    cmd = [
+        "claude",
+        "--dangerously-skip-permissions",
+        "-p", prompt,
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+    ]
+    if s["session_id"]:
+        cmd += ["--resume", s["session_id"]]
     if RESTRICT_PATHS:
         cmd += ["--allowedPaths", cwd]
 
-    master_fd: int | None = None
-
-    # ── Try PTY on Unix ────────────────────────────────────────────────────
-    if not IS_WINDOWS:
-        try:
-            import pty
-            master, slave = pty.openpty()
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                cwd=cwd,
-                env={
-                    **os.environ,
-                    "TERM": "xterm-256color",
-                    "COLUMNS": "160",
-                    "LINES": "50",
-                },
-            )
-            os.close(slave)
-            master_fd = master
-        except Exception as e:
-            logger.warning("PTY spawn failed (%s) — falling back to pipes", e)
-            master_fd = None
-
-    # ── Windows ConPTY via pywinpty ────────────────────────────────────────
-    if IS_WINDOWS and master_fd is None:
-        try:
-            from winpty import PtyProcess as _WinPty
-            pty_proc = _WinPty.spawn(
-                cmd,
-                dimensions=(50, 160),
-                cwd=cwd,
-                env={**os.environ, "COLUMNS": "160", "LINES": "50"},
-            )
-            logger.info("spawn_claude[%s]: using Windows ConPTY (pywinpty)", chat_id)
-            s["pty_proc"] = pty_proc
-            s["proc"] = None
-            s["master_fd"] = None
-            s["session_active"] = True
-            pty_proc.write((prompt + "\r\n").encode())
-            loop = asyncio.get_running_loop()
-            s["output_task"] = loop.create_task(_output_reader(chat_id, context))
-            s["keepalive_task"] = loop.create_task(_keepalive(chat_id, context))
-            return
-        except Exception as e:
-            logger.warning("winpty spawn failed (%s) — falling back to pipes", e)
-            s["pty_proc"] = None
-
-    # ── Pipe fallback (Windows without pywinpty, or PTY failure) ───────────
-    if master_fd is None:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
-        )
-
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=cwd,
+    )
     s["proc"] = proc
-    s["master_fd"] = master_fd
     s["session_active"] = True
-
-    # Send the initial prompt
-    prompt_bytes = (prompt + "\n").encode()
-    if master_fd is not None:
-        os.write(master_fd, prompt_bytes)
-    else:
-        proc.stdin.write(prompt_bytes)
-        await proc.stdin.drain()
 
     loop = asyncio.get_running_loop()
     s["output_task"] = loop.create_task(_output_reader(chat_id, context))
     s["keepalive_task"] = loop.create_task(_keepalive(chat_id, context))
-
-
-# ── Relay user input to Claude Code stdin ────────────────────────────────────
-async def relay_input(chat_id: int, text: str) -> None:
-    s = get_state(chat_id)
-    try:
-        if s.get("pty_proc"):
-            s["pty_proc"].write((text + "\r\n").encode())
-        elif s["master_fd"] is not None:
-            os.write(s["master_fd"], (text + "\n").encode())
-        elif s["proc"] and s["proc"].stdin:
-            s["proc"].stdin.write((text + "\n").encode())
-            await s["proc"].stdin.drain()
-    except OSError as e:
-        logger.error("relay_input error: %s", e)
 
 
 # ── Command handlers ──────────────────────────────────────────────────────────
@@ -560,24 +334,28 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• `/projects` — tap to switch between saved projects\n"
         "• `/save myapp` — save current dir as a named project\n\n"
         "*Session:*\n"
-        "• `/status` — current dir + active/idle\n"
+        "• `/status` — current dir + active/idle + session state\n"
         "• `/plan <task>` — ask Claude to plan without making changes\n"
+        "• `/bash <cmd>` — run a shell command directly (e.g. `/bash python hello.py`)\n"
         "• `/stop` — Ctrl+C to Claude Code\n"
-        "• `/reset` — kill session, stay in same dir\n\n"
+        "• `/reset` — kill session + clear context, stay in same dir\n\n"
         "*Example conversation:*\n"
         "```\n"
         "You:  /cd claude_code_bot\n"
         "Bot:  Now in: .../dev/claude_code_bot\n\n"
-        "You:  add unit tests for resolve_path\n"
+        "You:  create hello.py that prints hello world\n"
         "Bot:  Starting Claude Code...\n"
         "Bot:  [Claude streams output here]\n"
-        "Bot:  Do you want me to run the tests too?\n\n"
-        "You:  yes, run them\n"
-        "Bot:  [test results stream here]\n"
-        "Bot:  ✅ Session ended.\n\n"
-        "You:  /plan refactor the auth module\n"
-        "Bot:  [Claude outlines a plan, no files changed]\n"
-        "Bot:  ✅ Session ended.\n"
+        "Bot:  ✅ Done. Next message continues in context. /reset to start fresh.\n\n"
+        "You:  /bash python hello.py\n"
+        "Bot:  $ python hello.py\n"
+        "Bot:  hello world\n"
+        "Bot:  ✅ Done.\n\n"
+        "You:  now add a name parameter\n"
+        "Bot:  [Claude remembers hello.py natively via --resume]\n"
+        "Bot:  ✅ Done. Next message continues in context. /reset to start fresh.\n\n"
+        "You:  /reset\n"
+        "Bot:  Session reset. Context cleared.\n"
         "```",
         parse_mode="Markdown",
     )
@@ -588,10 +366,13 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     s = get_state(update.effective_chat.id)
     icon = "🟢 Active" if s["session_active"] else "⚫ Idle"
+    has_ctx = bool(s.get("session_id"))
+    ctx_line = "Context: session active (resumable)" if has_ctx else "Context: fresh"
     await update.message.reply_text(
         f"*Status*\n"
         f"Directory: `{s['cwd']}`\n"
-        f"Session: {icon}",
+        f"Session: {icon}\n"
+        f"{ctx_line}",
         parse_mode="Markdown",
     )
 
@@ -704,28 +485,60 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_task(chat_id, prompt, context, update)
 
 
+async def cmd_bash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    chat_id = update.effective_chat.id
+    s = get_state(chat_id)
+
+    if s["session_active"]:
+        await update.message.reply_text("⏳ Claude is working. Use /stop first.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/bash <command>`\nExample: `/bash python hello.py`",
+            parse_mode="Markdown",
+        )
+        return
+
+    cmd_str = " ".join(context.args)
+
+    if is_blocked(cmd_str):
+        await update.message.reply_text(
+            "⚠️ Blocked pattern detected. Command not run.",
+        )
+        return
+
+    audit(chat_id, f"BASH: {cmd_str}")
+    await update.message.reply_text(f"$ `{cmd_str}`", parse_mode="Markdown")
+
+    proc = await asyncio.create_subprocess_shell(
+        cmd_str,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=s["cwd"],
+    )
+    s["proc"] = proc
+    s["session_active"] = True
+
+    loop = asyncio.get_running_loop()
+    s["output_task"] = loop.create_task(_output_reader(chat_id, context))
+    s["keepalive_task"] = loop.create_task(_keepalive(chat_id, context))
+
+
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
     s = get_state(update.effective_chat.id)
-    has_proc = s["session_active"] and (
-        s.get("pty_proc") or s["master_fd"] is not None or s["proc"] is not None
-    )
-    if not has_proc:
+    if not (s["session_active"] and s["proc"]):
         await update.message.reply_text("No active session to stop.")
         return
     try:
-        if s.get("pty_proc"):
-            s["pty_proc"].write(b"\x03")       # Ctrl+C over ConPTY
-        elif s["master_fd"] is not None:
-            os.write(s["master_fd"], b"\x03")  # Ctrl+C over Unix PTY
-        elif IS_WINDOWS:
-            s["proc"].terminate()
-        else:
-            s["proc"].send_signal(signal.SIGINT)
-        await update.message.reply_text("Sent interrupt to Claude Code.")
+        s["proc"].terminate()
+        await update.message.reply_text("Sent terminate to Claude Code.")
     except Exception as e:
-        await update.message.reply_text(f"Error sending interrupt: {e}")
+        await update.message.reply_text(f"Error: {e}")
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -734,11 +547,6 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     s = get_state(update.effective_chat.id)
     cwd = s["cwd"]  # preserve current directory
 
-    if s.get("pty_proc"):
-        try:
-            s["pty_proc"].terminate(force=True)
-        except Exception:
-            pass
     if s["proc"]:
         try:
             s["proc"].kill()
@@ -750,7 +558,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     _sessions[update.effective_chat.id] = _blank_state()
     _sessions[update.effective_chat.id]["cwd"] = cwd
-    await update.message.reply_text("Session reset. Ready for a new task.")
+    await update.message.reply_text("Session reset. Context cleared. Ready for a new task.")
 
 
 # ── Message handler ───────────────────────────────────────────────────────────
@@ -775,9 +583,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("Cancelled.")
         return
 
-    # ── Active session: relay input to Claude Code ────────────────────────
-    if s["session_active"] and s["proc"]:
-        await relay_input(chat_id, text)
+    # ── Active session: non-interactive, can't relay input ───────────────
+    if s["session_active"]:
+        await update.message.reply_text("⏳ Claude is working. Please wait...")
         return
 
     # ── New task ──────────────────────────────────────────────────────────
@@ -861,6 +669,7 @@ def main() -> None:
     app.add_handler(CommandHandler("projects", cmd_projects))
     app.add_handler(CommandHandler("save", cmd_save))
     app.add_handler(CommandHandler("plan", cmd_plan))
+    app.add_handler(CommandHandler("bash", cmd_bash))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CallbackQueryHandler(handle_callback))
