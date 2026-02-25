@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,8 +24,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
-import serve as _serve_module
 
 load_dotenv()
 
@@ -82,6 +81,11 @@ ANSI_RE = re.compile(
     r"|\x1b[78]"
     r"|\x1b\[[?][0-9;]*[lh]"
 )
+
+_URL_RE = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
+_TEST_SERVE = str(Path(__file__).parent / "test_serve.py")
+_SERVE_PORT = 8080
+_serve_sessions: dict[int, dict] = {}
 
 MAX_MSG = 3500          # Telegram message char limit with breathing room
 KEEPALIVE_SECS = 30     # Send "still working" after this many idle seconds
@@ -636,6 +640,135 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Session reset. Context cleared. Ready for a new task.")
 
 
+
+# ── Serve helpers ──────────────────────────────────────────────────────────────
+def _serve_state(chat_id: int) -> dict:
+    if chat_id not in _serve_sessions:
+        _serve_sessions[chat_id] = {"proc": None, "url": None, "task": None}
+    return _serve_sessions[chat_id]
+
+
+def _is_serve_active(chat_id: int) -> bool:
+    s = _serve_sessions.get(chat_id)
+    return bool(s and s["proc"] is not None and s["proc"].returncode is None)
+
+
+async def _stop_serve(chat_id: int) -> None:
+    s = _serve_sessions.get(chat_id)
+    if not s:
+        return
+    if s["proc"]:
+        try:
+            s["proc"].kill()
+        except Exception:
+            pass
+        s["proc"] = None
+    if s["task"] and not s["task"].done():
+        s["task"].cancel()
+    s["task"] = None
+    s["url"] = None
+
+
+async def _watcher(chat_id: int, bot) -> None:
+    s = _serve_state(chat_id)
+    proc = s["proc"]
+    url_sent = False
+    try:
+        while True:
+            try:
+                line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=30)
+            except asyncio.TimeoutError:
+                if proc.returncode is not None:
+                    break
+                continue
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="replace")
+            logger.info("test_serve[%s]: %s", chat_id, line.rstrip())
+            if not url_sent:
+                m = _URL_RE.search(line)
+                if m:
+                    url = m.group(0)
+                    s["url"] = url
+                    url_sent = True
+                    try:
+                        await bot.send_message(
+                            chat_id,
+                            f"📱 Tunnel: {url}\n"
+                            "Open on your phone to preview!\n\n"
+                            "Use `/serve stop` to close.",
+                        )
+                    except Exception as e:
+                        logger.warning("watcher send error: %s", e)
+        s["proc"] = None
+        s["url"] = None
+        if url_sent:
+            try:
+                await bot.send_message(chat_id, "🔌 Tunnel closed.")
+            except Exception:
+                pass
+        else:
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "⚠️ Tunnel exited without producing a URL.\n"
+                    "Check that `cloudflared` is installed and working.",
+                )
+            except Exception:
+                pass
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error("watcher[%s] error: %s", chat_id, e)
+
+
+async def cmd_serve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    chat_id = update.effective_chat.id
+    args = context.args or []
+
+    if args and args[0].lower() == "stop":
+        if not _is_serve_active(chat_id):
+            await update.message.reply_text("No server is running.")
+            return
+        await _stop_serve(chat_id)
+        await update.message.reply_text("Server and tunnel stopped.")
+        return
+
+    if _is_serve_active(chat_id):
+        s = _serve_state(chat_id)
+        url = s.get("url")
+        if url:
+            await update.message.reply_text(
+                f"🌐 Already serving: {url}\nUse `/serve stop` to close."
+            )
+        else:
+            await update.message.reply_text("Server is starting, URL not yet available.")
+        return
+
+    cwd = get_state(chat_id)["cwd"]
+    await update.message.reply_text(
+        f"Starting server in `{cwd}`…\n\n"
+        f"💻 PC: http://localhost:{_SERVE_PORT}\n"
+        "📱 Mobile URL will appear in a moment.",
+        parse_mode="Markdown",
+    )
+
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, _TEST_SERVE, str(_SERVE_PORT),
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=env,
+    )
+    s = _serve_state(chat_id)
+    s["proc"] = proc
+    task = asyncio.get_running_loop().create_task(_watcher(chat_id, context.bot))
+    s["task"] = task
+
+
 # ── Message handler ───────────────────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
@@ -749,7 +882,7 @@ def main() -> None:
     app.add_handler(CommandHandler("bash", cmd_bash))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("reset", cmd_reset))
-    _serve_module.setup_handlers(app, get_state)
+    app.add_handler(CommandHandler("serve", cmd_serve))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

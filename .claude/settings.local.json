@@ -12,7 +12,9 @@
       "Bash(claude:*)",
       "Bash(bash:*)",
       "Bash(/c/Users/Jairo/.local/bin/claude:*)",
-      "Bash(env:*)"
+      "Bash(env:*)",
+      "WebSearch",
+      "Bash(cloudflared:*)"
     ]
   }
 }
