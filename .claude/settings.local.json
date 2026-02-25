@@ -6,7 +6,13 @@
       "Bash(head:*)",
       "Bash(grep Version:*)",
       "Bash(taskkill:*)",
-      "Bash(wmic process:*)"
+      "Bash(wmic process:*)",
+      "Bash(python:*)",
+      "Bash(kill 1232:*)",
+      "Bash(claude:*)",
+      "Bash(bash:*)",
+      "Bash(/c/Users/Jairo/.local/bin/claude:*)",
+      "Bash(env:*)"
     ]
   }
 }

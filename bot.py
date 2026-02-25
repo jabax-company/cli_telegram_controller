@@ -24,6 +24,8 @@ from telegram.ext import (
     filters,
 )
 
+import serve as _serve_module
+
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -324,12 +326,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "*Claude Code Companion*\n\n"
         f"Base dir: `{BASE_DIR}`\n"
-        f"Current dir: `{s['cwd']}`\n\n"
+        f"Current dir: `{s['cwd']}`\n"
+        "Use `/help` for the full command reference.\n\n"
         "*Navigation:*\n"
         "• `/cd` — go to base dir\n"
         "• `/cd myapp` — switch to BASE\\_DIR/myapp (auto-resolved)\n"
         "• `/cd ~/other/path` — full path\n"
         "• `/cd saved-name` — jump to a saved project\n"
+        "• `/mkdir <name>` — create new project folder and switch to it\n"
         "• `/paths` — see all available directories\n"
         "• `/projects` — tap to switch between saved projects\n"
         "• `/save myapp` — save current dir as a named project\n\n"
@@ -338,25 +342,73 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• `/plan <task>` — ask Claude to plan without making changes\n"
         "• `/bash <cmd>` — run a shell command directly (e.g. `/bash python hello.py`)\n"
         "• `/stop` — Ctrl+C to Claude Code\n"
-        "• `/reset` — kill session + clear context, stay in same dir\n\n"
-        "*Example conversation:*\n"
+        "• `/reset` — kill session + clear context, stay in same dir\n"
+        "• `/serve` — serve current dir as website + open public URL for phone preview\n"
+        "• `/serve stop` — stop the server and tunnel\n\n"
+        "*Example — new web project:*\n"
         "```\n"
-        "You:  /cd claude_code_bot\n"
-        "Bot:  Now in: .../dev/claude_code_bot\n\n"
-        "You:  create hello.py that prints hello world\n"
-        "Bot:  Starting Claude Code...\n"
-        "Bot:  [Claude streams output here]\n"
-        "Bot:  ✅ Done. Next message continues in context. /reset to start fresh.\n\n"
-        "You:  /bash python hello.py\n"
-        "Bot:  $ python hello.py\n"
-        "Bot:  hello world\n"
+        "You:  /mkdir mysite\n"
+        "Bot:  Created, switched to: .../mysite\n\n"
+        "You:  create a landing page with a hero section and contact form\n"
+        "Bot:  ✅ Done. Next message continues in context.\n\n"
+        "You:  /serve\n"
+        "Bot:  🌐 https://zebra-toast-abc.trycloudflare.com\n\n"
+        "You:  make the hero background dark blue and the button green\n"
         "Bot:  ✅ Done.\n\n"
-        "You:  now add a name parameter\n"
-        "Bot:  [Claude remembers hello.py natively via --resume]\n"
-        "Bot:  ✅ Done. Next message continues in context. /reset to start fresh.\n\n"
+        "You:  /serve stop\n"
+        "Bot:  Server and tunnel stopped.\n"
+        "```\n\n"
+        "*Example — existing project:*\n"
+        "```\n"
+        "You:  /cd myapp\n"
+        "Bot:  Now in: .../dev/myapp\n\n"
+        "You:  add a login page\n"
+        "Bot:  ✅ Done. Next message continues in context.\n\n"
+        "You:  /bash python -m pytest\n"
+        "Bot:  $ python -m pytest\n"
+        "Bot:  3 passed in 0.4s\n"
+        "Bot:  ✅ Done.\n\n"
         "You:  /reset\n"
         "Bot:  Session reset. Context cleared.\n"
         "```",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    s = get_state(update.effective_chat.id)
+    await update.message.reply_text(
+        "*Command Reference*\n\n"
+        f"Base dir: `{BASE_DIR}`\n"
+        f"Current dir: `{s['cwd']}`\n\n"
+        "*Navigation:*\n"
+        "• `/cd` — return to base dir\n"
+        "• `/cd <name>` — smart resolve: saved project → abs path → BASE\\_DIR/name → ~/name\n"
+        "• `/cd ~/some/path` — full tilde-expanded path\n"
+        "• `/mkdir <name>` — create folder under cwd and switch into it; "
+        "supports nested paths like `a/b/c`; re-running on an existing folder just switches to it\n"
+        "• `/paths` — list saved projects + all subdirs of BASE\\_DIR\n"
+        "• `/projects` — button menu to jump between saved projects\n"
+        "• `/save <name>` — bookmark current dir as a named project (persists across restarts)\n\n"
+        "*Session:*\n"
+        "• `/status` — show cwd, active/idle state, and whether context is resumable\n"
+        "• `/plan <task>` — ask Claude to outline steps without touching any files\n"
+        "• `/bash <cmd>` — run a shell command in cwd; output streams back to chat\n"
+        "• `/stop` — send SIGTERM to Claude Code (graceful interrupt)\n"
+        "• `/reset` — kill any active process, clear session context, stay in same dir\n\n"
+        "*Server / Preview:*\n"
+        "• `/serve` — start HTTP server + Cloudflare tunnel; replies with public URL\n"
+        "• `/serve stop` — kill server and tunnel\n"
+        "• `/serve status` — show whether server + tunnel are currently running\n\n"
+        "*Tips:*\n"
+        "• After a task finishes, Claude's session stays open via `--resume`. "
+        "Your next message continues in full context — no need to repeat anything.\n"
+        "• Use `/reset` between unrelated tasks to free up context.\n"
+        "• `/bash` runs in cwd — `/cd` first if needed.\n"
+        "• `/mkdir a/b/c` creates all intermediate folders in one step.\n"
+        "• Blocked destructive patterns (e.g. `rm -rf /`) require explicit `YES` confirmation.",
         parse_mode="Markdown",
     )
 
@@ -394,6 +446,29 @@ async def cmd_cd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     get_state(chat_id)["cwd"] = target
     await update.message.reply_text(f"Now in: `{target}`", parse_mode="Markdown")
+
+
+async def cmd_mkdir(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/mkdir <folder-name>`", parse_mode="Markdown")
+        return
+    chat_id = update.effective_chat.id
+    name = " ".join(context.args)
+    s = get_state(chat_id)
+    new_path = os.path.join(s["cwd"], name)
+    already_existed = os.path.isdir(new_path)
+    try:
+        os.makedirs(new_path, exist_ok=True)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not create directory: {e}")
+        return
+    s["cwd"] = new_path
+    verb = "Already exists" if already_existed else "Created"
+    await update.message.reply_text(
+        f"{verb}, switched to: `{new_path}`", parse_mode="Markdown"
+    )
 
 
 async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -663,8 +738,10 @@ def main() -> None:
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cd", cmd_cd))
+    app.add_handler(CommandHandler("mkdir", cmd_mkdir))
     app.add_handler(CommandHandler("paths", cmd_paths))
     app.add_handler(CommandHandler("projects", cmd_projects))
     app.add_handler(CommandHandler("save", cmd_save))
@@ -672,6 +749,7 @@ def main() -> None:
     app.add_handler(CommandHandler("bash", cmd_bash))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    _serve_module.setup_handlers(app, get_state)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
