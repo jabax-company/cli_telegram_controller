@@ -1,189 +1,250 @@
-# Claude Code Companion — local-mode
+# Claude Code Companion (local mode)
 
-A Telegram interface for **Claude Code developers**.
+Bot de Telegram para controlar Claude Code en tu maquina local.
 
-Instead of a general shell, this bot bridges Telegram directly to Claude Code's interactive mode running on your machine. Claude Code already handles running tests, starting servers, committing, pushing, and opening PRs — you just ask it in plain language.
+## Tutorial desde cero
 
-```
-You (Telegram) ──► Claude Code (interactive, on your machine) ──► your project
-Claude Code output / questions ──► Telegram
-Your replies ──► Claude Code stdin
-```
+### 1) Requisitos
 
----
+- Windows + PowerShell (este README usa esos comandos)
+- Python 3.13
+- `uv` instalado
+- Claude Code CLI instalado y autenticado
+- `cloudflared` instalado (para publicar URL en internet)
+- Bot de Telegram creado con @BotFather
 
-## Quick start
+### 2) Clonar y entrar al repo
 
-```bash
-# 1. Clone and enter the directory
+```powershell
 git clone https://github.com/YOUR_USER/claude_code_bot
 cd claude_code_bot
+```
 
-# 2. Run setup (prompts for your 2 required values, installs deps)
-bash setup.sh
+### 3) Fijar Python y sincronizar dependencias
 
-# 3. Authenticate Claude Code (one-time)
+```powershell
+uv python install 3.13
+uv python pin 3.13
+uv sync
+```
+
+### 4) Configurar variables de entorno
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Edita `.env` y pon como minimo:
+
+- `TELEGRAM_TOKEN`
+- `TELEGRAM_USER_ID`
+
+Para audio:
+
+- `WHISPER_MODEL` (opcional, por defecto `small`)
+- opcional: `WHISPER_DEVICE=auto`
+- opcional: `WHISPER_COMPUTE_TYPE=int8`
+- opcional: `WHISPER_PRIMARY_LANGUAGE=es` (por defecto espanol)
+- opcional: `WHISPER_ALLOW_AUTO_FALLBACK=true` (permite audios en ingles)
+
+### 5) Login de Claude Code
+
+```powershell
 claude auth login
-
-# 4. Start the bot
-python bot.py
 ```
 
-Open Telegram, find your bot, send `/start`.
+### 6) Ejecutar el bot
 
----
-
-## Requirements
-
-- Python 3.10+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- A Telegram bot token — create one with [@BotFather](https://t.me/BotFather)
-- Your numeric Telegram user ID — get it from [@userinfobot](https://t.me/userinfobot)
-
-An Anthropic API key is **optional but recommended** — used for AI status summaries (see below). Claude Code already requires one, so it is likely already set in your environment.
-No GitHub PAT needed (your local git credentials are used).
-
----
-
-## Configuration
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `TELEGRAM_TOKEN` | Yes | — | Bot token from @BotFather |
-| `TELEGRAM_USER_ID` | Yes | — | Your numeric Telegram ID |
-| `ANTHROPIC_API_KEY` | No | — | Enables AI status summaries every 5 min via Claude Haiku. Falls back to raw output lines if unset. Claude Code already needs this key, so it is likely already in your environment. |
-| `INITIAL_DIR` | No | `~` | Default working directory on start |
-| `RESTRICT_PATHS` | No | `false` | Set `true` to add `--allowedPaths` (restricts Claude to the project dir) |
-| `BLOCKED_PATTERNS` | No | — | Comma-separated extra patterns to block before sending to Claude Code |
-
-Copy `.env.example` to `.env` and fill in your values, or just run `./setup.sh`.
-
----
-
-## Bot commands
-
-| Command | Description |
-|---|---|
-| `/start` | Welcome message + quick reference |
-| `/cd <path>` | Change working directory (full path or saved project name) |
-| `/projects` | List saved projects as tappable buttons |
-| `/save <name>` | Save current directory as a named project |
-| `/status` | Show current directory and whether a session is active |
-| `/stop` | Send Ctrl+C to Claude Code (interrupt current task) |
-| `/reset` | Kill active session, clear state, stay in same directory |
-
----
-
-## How sessions work
-
-Send a task in plain language → Claude Code starts in your current directory.
-
-```
-You:        add a health check endpoint
-Bot:        Starting Claude Code in /home/user/myapp...
-Bot:        (Claude Code output streams here)
-Bot:        Should I create a new file? 1. Yes  2. No
-You:        1
-Bot:        (Claude Code continues...)
-Bot:        ✅ Session ended.
+```powershell
+uv run python bot.py
 ```
 
-While a session is active, **all your messages are forwarded to Claude Code's stdin** — so you can answer its questions, pick numbered options, or give follow-up instructions.
+Si arranca bien, veras algo como:
 
-Use `/stop` to send Ctrl+C (interrupt), or `/reset` to kill the process entirely.
-
----
-
-## Project navigation
-
-Save your projects once, switch between them with a tap:
-
-```
-/cd ~/projects/myapp        → switch by path
-/save myapp                 → save it as "myapp"
-/projects                   → tap to switch
-/cd myapp                   → switch by name
-```
-
-Projects are stored in `~/.claude_code_bot/projects.json`.
+`Claude Code Companion (local-mode) started. Authorized user: ...`
 
 ---
 
-## What Claude Code can do for you
+## Uso rapido en Telegram
 
-Just ask in plain language — no special commands needed:
+### Flujo base
 
-- `add a REST endpoint for user login`
-- `run the tests and fix any failures`
-- `commit and push this branch`
-- `create a PR from this branch to main`
-- `start the dev server and tell me the port`
-- `refactor the auth module to use JWT`
+1. Envia `/start`
+2. Selecciona carpeta:
+   - `/paths` (navegador por botones)
+   - o `/cd C:\ruta\proyecto`
+3. Envia `/claude` para activar modo Claude
+4. Envia tu prompt por texto, audio o imagen con caption
+5. Si envias una imagen sin caption, queda en cola para tu siguiente prompt
+6. Usa `/exit` para salir de modo Claude
 
-Claude Code handles the git, the files, the shell commands — you just describe the goal.
+### Imagenes de referencia
+
+- Las imagenes se guardan en `images/` en la raiz del repo del bot.
+- Si una imagen llega con caption y estas en modo Claude, se ejecuta al instante con referencia al archivo guardado.
+- Si llega sin caption, el bot espera tu siguiente prompt y adjunta la imagen automaticamente.
+- Puedes usar `<image>` o `<images>` en el prompt para referenciar imagen(es) guardada(s).
+
+### Comandos importantes
+
+- `/cd <ruta>` -> cambiar directorio actual
+- `/3d <ruta>` -> alias de `/cd` (util para dictado por voz)
+- `/branch <nombre>` -> crea/cambia rama y bloquea los cambios de `/claude` en esa rama
+- `/claude` -> ejecuta el prompt pendiente
+- `/claude <texto>` -> ejecuta texto directo
+- `/bot stop` -> apaga este proceso del bot de forma remota
+- `/status` -> estado de sesion, carpeta actual y prompt pendiente
+- `/stop` -> interrumpe la ejecucion actual
+- `/reset` -> limpia contexto/sesion
 
 ---
 
-## Security model
+## Publicar web local en Cloudflare
 
-| Layer | What it protects against |
-|---|---|
-| `TELEGRAM_USER_ID` check | Anyone else using the bot (primary gate) |
-| `RESTRICT_PATHS=true` (opt-in) | Claude Code writing outside the project directory |
-| Blocklist pre-check | Obvious catastrophic prompts (e.g. `rm -rf ~`, fork bombs) |
-| Non-root execution | System-level damage |
-| Audit log (`~/.claude_code_bot/audit.log`) | Accountability — every prompt logged |
+El codigo sigue corriendo en tu maquina local.
+Cloudflare solo expone una URL publica hacia tu localhost.
 
-**Blocklist**: before sending a prompt to Claude Code, the bot checks for patterns like `rm -rf /`, `rm -rf ~`, `sudo rm`, `dd if=`, `mkfs`, fork bombs, and `curl | bash`. If matched, it warns and asks for explicit `YES` confirmation.
+### Caso A: sitio estatico (HTML/CSS/JS)
 
-**Trade-off with `RESTRICT_PATHS=false` (default)**: Claude Code can touch any file your user account can — the same as running it in your terminal. The `TELEGRAM_USER_ID` check ensures only you control it.
-
----
-
-## Architecture
-
-```
-bot.py
-  │
-  ├─ /cd /projects /save       →  working directory navigation
-  │
-  ├─ User sends task
-  │     ├─ Security pre-check (blocklist)
-  │     └─ Spawn: claude --dangerously-skip-permissions [--allowedPaths cwd]
-  │               cwd = current project directory
-  │
-  ├─ PTY bridge (async):
-  │     read output ──strip ANSI──buffer──► Telegram messages
-  │     Telegram reply ──────────────────► Claude Code stdin
-  │
-  ├─ /stop    →  Ctrl+C to Claude Code
-  ├─ /reset   →  kill session, start fresh
-  └─ /status  →  show cwd + session state
+```text
+/server
 ```
 
-On Linux/macOS: Claude Code runs in a proper PTY (full terminal UI).
-On Windows: falls back to subprocess pipes (functional, no TUI).
+Publica la carpeta actual como web estatica.
+
+### Caso B: backend ya corriendo en local
+
+Si tu app ya esta escuchando en un puerto local, por ejemplo `5000`:
+
+```text
+/server proxy 5000
+```
+
+### Caso C: arrancar backend desde el bot y publicarlo
+
+Ejemplo Python:
+
+```text
+/server run 5000 python app.py
+```
+
+Ejemplo Node:
+
+```text
+/server run 3000 npm run dev
+```
+
+### Caso D: frontend + backend bajo una sola URL
+
+Si tu frontend y backend corren en puertos distintos localmente:
+
+```text
+/server fullstack 3000 5000
+```
+
+Eso publica una sola URL donde:
+
+- rutas ` /api/* ` -> backend (`5000`)
+- resto de rutas -> frontend (`3000`)
+
+Si tu API usa otro prefijo:
+
+```text
+/server fullstack 3000 5000 /backend
+```
+
+Recomendado para evitar CORS y que todo funcione desde el mismo dominio Cloudflare.
+
+Si alguno de los dos puertos no esta levantado, el bot intenta arrancar frontend/backend automaticamente.
+Por defecto, intenta frontend con `npm run dev` en la raiz del repo.
+Para backend, primero intenta leer el archivo `.claude/backend_run.json` (si existe) y usar ese comando.
+Solo despues usa deteccion en scripts/entrypoints de la raiz del repo.
+Si no puede detectar el comando correcto, define comandos explicitos en `.env`:
+
+```text
+FULLSTACK_FRONT_CMD=npm run dev
+FULLSTACK_FRONT_DIR=frontend
+FULLSTACK_BACK_CMD=uv run python main.py
+FULLSTACK_BACK_DIR=backend
+```
+
+Formato recomendado para `.claude/backend_run.json`:
+
+```json
+{
+  "command": "uv run python main.py",
+  "workdir": "backend",
+  "port": 8000,
+  "api_prefix": "/api"
+}
+```
+
+### Estado y parada
+
+```text
+/server status
+/server stop
+```
+
+> `/serve` tambien funciona como alias de `/server`.
 
 ---
 
-## Output handling
+## Cambiar base directory desde Telegram
 
-| Situation | Behavior |
-|---|---|
-| Output ≤ 3500 chars | Sent as-is in a code block |
-| Output > 3500 chars | First 3500 chars + `(output truncated — ask Claude to summarize)` |
-| No output for 30 s | `⏳ Still working...` (one-time nudge) |
-| Every 5 min while active | `📊 Status update` — 1–2 sentence AI summary of recent output (Claude Haiku). Falls back to last 8 raw output lines if `ANTHROPIC_API_KEY` is not set. |
-| Session ended | `✅ Session ended.` + prompt for next task |
+Cada chat tiene su base path:
+
+- ver base actual:
+  - `/base`
+- cambiar base:
+  - `/base C:\Users\balta\proyectos`
+- resetear base al valor inicial del bot:
+  - `/base reset`
+
+Al cambiar base, el bot tambien cambia `Current dir` a esa carpeta.
+Luego `/cd`, `/3d` y `/paths` usan esa base.
 
 ---
 
-## Files
+## Audio a texto (local faster-whisper)
 
-| File | Purpose |
-|---|---|
-| `bot.py` | Main bot — PTY bridge, commands, session state |
-| `requirements.txt` | `python-telegram-bot`, `python-dotenv`, `anthropic` |
-| `.env.example` | Template for environment variables |
-| `setup.sh` | Interactive setup script |
-| `.github/workflows/agente.yml` | Unchanged — stays on `main` branch |
+Si mandas una nota de voz o audio:
+
+1. El bot la transcribe localmente con `faster-whisper`
+   (primero intenta en espanol por defecto y puede hacer fallback automatico).
+2. Guarda esa transcripcion como prompt pendiente
+3. Ejecutas con `/claude`
+
+Si falla, revisa que `faster-whisper` este instalado y tu configuracion `WHISPER_*` en `.env`.
+
+---
+
+## Variables de entorno
+
+Relevantes para este flujo:
+
+- `TELEGRAM_TOKEN` (requerida)
+- `TELEGRAM_USER_ID` (requerida)
+- `WHISPER_MODEL` (opcional; por defecto `small`)
+- `WHISPER_DEVICE` (opcional; `auto`, `cpu` o `cuda`)
+- `WHISPER_COMPUTE_TYPE` (opcional; por defecto `int8`)
+- `WHISPER_BEAM_SIZE` (opcional; por defecto `5`)
+- `WHISPER_VAD_FILTER` (opcional; por defecto `true`)
+- `WHISPER_PRIMARY_LANGUAGE` (opcional; por defecto `es`)
+- `WHISPER_ALLOW_AUTO_FALLBACK` (opcional; por defecto `true`)
+- `INITIAL_DIR` (opcional)
+- `RESTRICT_PATHS` (opcional; restringe a `cwd` cuando el CLI lo soporte)
+- `SAFE_MODE` (opcional, por defecto `true`; bloquea comandos destructivos)
+- `INACTIVITY_TIMEOUT_SECS` (opcional, por defecto `900`; cierra Claude + server tras inactividad)
+- `INACTIVITY_CHECK_SECS` (opcional, por defecto `30`; frecuencia del watchdog de inactividad)
+- `MAX_IMAGE_HISTORY` (opcional, por defecto `50`; maximo de imagenes recordadas por chat)
+- `MAX_PENDING_IMAGES` (opcional, por defecto `10`; maximo de imagenes pendientes por usar)
+- `TRAY_ICON_ENABLED` (opcional, por defecto `true`; icono en bandeja de Windows con boton Stop)
+- `FULLSTACK_FRONT_CMD` (opcional; comando para levantar frontend en `/server fullstack`)
+- `FULLSTACK_FRONT_DIR` (opcional; carpeta del frontend)
+- `FULLSTACK_BACK_CMD` (opcional; comando para levantar backend en `/server fullstack`)
+- `FULLSTACK_BACK_DIR` (opcional; carpeta del backend)
+- `BACKEND_RUNBOOK_FILE` (opcional; archivo JSON con comando de backend)
+- `ENFORCE_BACKEND_RUNBOOK` (opcional; por defecto `true`, instruye a Claude a mantener ese archivo)
+- `BLOCKED_PATTERNS` (opcional)
+- `SERVE_PORT` (opcional, por defecto 8080 para modo estatico)
