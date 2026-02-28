@@ -66,6 +66,7 @@ def get_serve_state(chat_id: int) -> dict:
         serve_sessions[chat_id] = {
             "tunnel_proc": None,
             "app_proc": None,
+            "app_output_task": None,
             "extra_procs": [],
             "url": None,
             "task": None,
@@ -75,6 +76,7 @@ def get_serve_state(chat_id: int) -> dict:
         }
     state = serve_sessions[chat_id]
     state.setdefault("extra_procs", [])
+    state.setdefault("app_output_task", None)
     return state
 
 

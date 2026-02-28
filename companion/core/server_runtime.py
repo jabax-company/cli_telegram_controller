@@ -7,6 +7,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -33,6 +34,18 @@ from companion.core.claude_runtime import run_task
 from companion.core.state import get_serve_state, get_state, is_serve_active
 
 logger = logging.getLogger(__name__)
+
+_PORT_FROM_URL_RE = re.compile(
+    r"https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(?P<port>\d{2,5})",
+    flags=re.IGNORECASE,
+)
+_PORT_FROM_HOST_RE = re.compile(
+    r"\b(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(?P<port>\d{2,5})\b",
+    flags=re.IGNORECASE,
+)
+_PORT_WORD_RE = re.compile(r"\bport\s+(?P<port>\d{2,5})\b", flags=re.IGNORECASE)
+_COMMON_WEB_PORTS = [3000, 3001, 4173, 5000, 5173, 5174, 8000, 8080, 8081]
+_DEFAULT_DEV_PORT = 5173
 
 
 @dataclass
@@ -62,6 +75,238 @@ def _kill_process(proc) -> None:
 def _kill_processes(procs: list) -> None:
     for proc in procs:
         _kill_process(proc)
+
+
+def _candidate_ports_from_text(text: str) -> set[int]:
+    ports: set[int] = set()
+    if not text:
+        return ports
+    for regex in (_PORT_FROM_URL_RE, _PORT_FROM_HOST_RE, _PORT_WORD_RE):
+        for match in regex.finditer(text):
+            raw = match.group("port")
+            try:
+                value = int(raw)
+            except Exception:
+                continue
+            if 1 <= value <= 65535:
+                ports.add(value)
+    return ports
+
+
+def _format_startup_lines(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    snippet = "\n".join(lines[-8:])
+    if len(snippet) > 900:
+        snippet = snippet[-900:]
+    return snippet
+
+
+def _looks_like_node_dev_command(command: str) -> bool:
+    normalized = " ".join((command or "").strip().split()).lower()
+    return (
+        normalized.startswith("npm run dev")
+        or normalized.startswith("pnpm run dev")
+        or normalized.startswith("yarn run dev")
+        or normalized.startswith("yarn dev")
+    )
+
+
+def _inject_dev_server_port(command: str, port: int) -> tuple[str, bool]:
+    normalized = " ".join((command or "").strip().split())
+    lowered = normalized.lower()
+    if not _looks_like_node_dev_command(normalized):
+        return command, False
+    if "--port" in lowered or " -p " in f" {lowered} ":
+        return command, False
+
+    if lowered.startswith("npm run dev") or lowered.startswith("pnpm run dev"):
+        return f"{command} -- --port {port}", True
+    if lowered.startswith("yarn run dev") or lowered.startswith("yarn dev"):
+        return f"{command} --port {port}", True
+    return command, False
+
+
+def _extract_port_from_local_addr(local_addr: str) -> int | None:
+    text = (local_addr or "").strip()
+    if not text:
+        return None
+    if text.startswith("[") and "]:" in text:
+        text = text.split("]:", 1)[1]
+    else:
+        if ":" not in text:
+            return None
+        text = text.rsplit(":", 1)[1]
+    try:
+        port = int(text)
+    except Exception:
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
+def _list_listening_local_ports() -> set[int]:
+    commands = [
+        ["netstat", "-ano", "-p", "tcp"],
+        ["netstat", "-an"],
+    ]
+    output = ""
+    for cmd in commands:
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+            )
+            output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+            if completed.returncode == 0 and output.strip():
+                break
+        except Exception:
+            continue
+    if not output.strip():
+        return set()
+
+    ports: set[int] = set()
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        upper = line.upper()
+        if "LISTEN" not in upper:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        local_addr = parts[1]
+        port = _extract_port_from_local_addr(local_addr)
+        if port is not None:
+            ports.add(port)
+    return ports
+
+
+async def _is_port_open(port: int) -> bool:
+    for host in ("localhost", "127.0.0.1"):
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _origin_url_for_port(port: int) -> str:
+    for host in ("localhost", "127.0.0.1"):
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            writer.close()
+            await writer.wait_closed()
+            return f"http://{host}:{port}"
+        except Exception:
+            continue
+    return f"http://localhost:{port}"
+
+
+async def _drain_stream(stream, chat_id: int, label: str = "run") -> None:
+    if stream is None:
+        return
+    try:
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                return
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.debug("stream drain error (%s, chat=%s): %s", label, chat_id, exc)
+
+
+async def _detect_launched_service_port(
+    proc,
+    expected_port: int | None,
+    timeout: float = 45.0,
+) -> tuple[int | None, list[str], str | None]:
+    startup_lines: list[str] = []
+    seen_ports: set[int] = set()
+    if expected_port is not None:
+        seen_ports.add(expected_port)
+
+    baseline_common: dict[int, bool] = {}
+    for candidate in _COMMON_WEB_PORTS:
+        baseline_common[candidate] = await _is_port_open(candidate)
+    baseline_listening = await asyncio.to_thread(_list_listening_local_ports)
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    stdout = getattr(proc, "stdout", None)
+    while loop.time() < deadline:
+        if proc.returncode is not None:
+            return None, startup_lines, f"Command exited with code {proc.returncode}."
+
+        for candidate in list(seen_ports):
+            if await _is_port_open(candidate):
+                return candidate, startup_lines, None
+
+        if expected_port is None:
+            for candidate in _COMMON_WEB_PORTS:
+                if baseline_common.get(candidate):
+                    continue
+                if await _is_port_open(candidate):
+                    return candidate, startup_lines, None
+            current_listening = await asyncio.to_thread(_list_listening_local_ports)
+            newly_opened = sorted(
+                p for p in current_listening if p not in baseline_listening and p >= 1024
+            )
+            for candidate in newly_opened:
+                if await _is_port_open(candidate):
+                    return candidate, startup_lines, None
+
+        if stdout is None:
+            await asyncio.sleep(0.2)
+            continue
+
+        try:
+            line_bytes = await asyncio.wait_for(stdout.readline(), timeout=0.9)
+        except asyncio.TimeoutError:
+            continue
+        if not line_bytes:
+            await asyncio.sleep(0.2)
+            continue
+
+        line = line_bytes.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        logger.info("run-startup: %s", line)
+        startup_lines.append(line)
+        if len(startup_lines) > 30:
+            startup_lines = startup_lines[-30:]
+        seen_ports.update(_candidate_ports_from_text(line))
+
+    for candidate in list(seen_ports):
+        if await _is_port_open(candidate):
+            return candidate, startup_lines, None
+    if expected_port is not None and await _is_port_open(expected_port):
+        return expected_port, startup_lines, None
+    if expected_port is None:
+        for candidate in _COMMON_WEB_PORTS:
+            if baseline_common.get(candidate):
+                continue
+            if await _is_port_open(candidate):
+                return candidate, startup_lines, None
+        current_listening = await asyncio.to_thread(_list_listening_local_ports)
+        newly_opened = sorted(
+            p for p in current_listening if p not in baseline_listening and p >= 1024
+        )
+        for candidate in newly_opened:
+            if await _is_port_open(candidate):
+                return candidate, startup_lines, None
+
+    return None, startup_lines, "Timed out waiting for app startup."
 
 
 def _probe_http_sync(port: int, path: str = "/", timeout: float = 3.0) -> HttpProbe:
@@ -499,6 +744,10 @@ async def start_local_service(
 
 async def stop_serve(chat_id: int) -> None:
     state = get_serve_state(chat_id)
+    drain_task = state.get("app_output_task")
+    if drain_task and not drain_task.done():
+        drain_task.cancel()
+    state["app_output_task"] = None
     if state.get("tunnel_proc"):
         _kill_process(state["tunnel_proc"])
         state["tunnel_proc"] = None
@@ -564,6 +813,10 @@ async def watch_serve(chat_id: int, bot) -> None:
         if state.get("app_proc"):
             _kill_process(state["app_proc"])
             state["app_proc"] = None
+        drain_task = state.get("app_output_task")
+        if drain_task and not drain_task.done():
+            drain_task.cancel()
+        state["app_output_task"] = None
         _kill_processes(list(state.get("extra_procs") or []))
         state["extra_procs"] = []
         state["mode"] = None
@@ -579,13 +832,15 @@ async def wait_for_port(port: int, timeout: float = 20.0) -> bool:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
-        try:
-            reader, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            return True
-        except Exception:
-            await asyncio.sleep(0.4)
+        for host in ("localhost", "127.0.0.1"):
+            try:
+                reader, writer = await asyncio.open_connection(host, port)
+                writer.close()
+                await writer.wait_closed()
+                return True
+            except Exception:
+                continue
+        await asyncio.sleep(0.4)
     return False
 
 
@@ -797,46 +1052,118 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     if args[0].lower() == "run":
-        if len(args) < 3:
-            await update.effective_message.reply_text("Usage: /server run <port> <command>")
+        if len(args) < 2:
+            await update.effective_message.reply_text(
+                "Usage: /server run <command>\n"
+                "       /server run auto <command>\n"
+                "       /server run <port> <command>"
+            )
             return
-        try:
-            port = int(args[1])
-        except ValueError:
-            await update.effective_message.reply_text("Port must be an integer.")
+        expected_port: int | None = None
+        run_args = args[1:]
+        first_token = run_args[0].strip().lower()
+        command_parts: list[str]
+        if first_token == "auto":
+            command_parts = run_args[1:]
+        else:
+            try:
+                expected_port = int(first_token)
+                if expected_port < 1 or expected_port > 65535:
+                    await update.effective_message.reply_text("Port must be between 1 and 65535.")
+                    return
+                command_parts = run_args[1:]
+            except ValueError:
+                # Port omitted -> auto-detect mode.
+                expected_port = None
+                command_parts = run_args
+
+        if not command_parts:
+            await update.effective_message.reply_text(
+                "Usage: /server run <command>\n"
+                "       /server run auto <command>\n"
+                "       /server run <port> <command>"
+            )
             return
-        command = " ".join(args[2:])
+
+        command = " ".join(command_parts)
+        forced_port_hint = ""
+        if expected_port is None and _looks_like_node_dev_command(command):
+            try:
+                expected_port = find_available_port(_DEFAULT_DEV_PORT)
+            except Exception:
+                expected_port = _DEFAULT_DEV_PORT
+            command, forced = _inject_dev_server_port(command, expected_port)
+            if forced:
+                forced_port_hint = (
+                    f"\nDev port forced to: {expected_port} "
+                    "(added --port)"
+                )
+        expected_label = str(expected_port) if expected_port is not None else "auto-detect"
         await update.effective_message.reply_text(
             f"Starting app command in {cwd}\n"
             f"Command: {command}\n"
-            f"Expected port: {port}"
+            f"Expected port: {expected_label}{forced_port_hint}"
         )
+        env = os.environ.copy()
+        if expected_port is not None:
+            env["PORT"] = str(expected_port)
+        env.setdefault("HOST", "127.0.0.1")
         app_proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd,
-            stdout=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=env,
         )
-        if not await wait_for_port(port, timeout=20):
+        await update.effective_message.reply_text(
+            "Command started. Detecting app port..."
+        )
+        detected_port, startup_lines, err = await _detect_launched_service_port(
+            app_proc,
+            expected_port=expected_port,
+            timeout=50.0,
+        )
+        if err or detected_port is None:
             try:
                 app_proc.kill()
             except Exception:
                 pass
+            details = _format_startup_lines(startup_lines)
+            extra = f"\nStartup logs (tail):\n{details}" if details else ""
             await update.effective_message.reply_text(
-                f"App did not open port {port}. Check your command."
+                f"Could not detect app port for command.\n"
+                f"{err or 'Unknown startup failure.'}{extra}"
             )
             return
+        if app_proc.stdout is not None:
+            state["app_output_task"] = asyncio.get_running_loop().create_task(
+                _drain_stream(app_proc.stdout, chat_id, label="run-app")
+            )
+        if expected_port is not None and detected_port != expected_port:
+            await update.effective_message.reply_text(
+                f"Detected app port {detected_port} (expected {expected_port}). "
+                "I will publish the detected port."
+            )
+        if expected_port is None:
+            await update.effective_message.reply_text(
+                f"Detected app port {detected_port}. Publishing it now."
+            )
         state["mode"] = "run"
         state["extra_procs"] = []
         try:
+            target_url = await _origin_url_for_port(detected_port)
             await start_tunnel(
-                chat_id, f"http://127.0.0.1:{port}", context.bot, app_proc=app_proc
+                chat_id, target_url, context.bot, app_proc=app_proc
             )
         except Exception as e:
             try:
                 app_proc.kill()
             except Exception:
                 pass
+            drain_task = state.get("app_output_task")
+            if drain_task and not drain_task.done():
+                drain_task.cancel()
+            state["app_output_task"] = None
             await update.effective_message.reply_text(f"Failed to start tunnel: {e}")
         return
 
@@ -1080,6 +1407,8 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "Usage:\n"
         "/server\n"
         "/server proxy <port>\n"
+        "/server run <command>\n"
+        "/server run auto <command>\n"
         "/server run <port> <command>\n"
         "/server fullstack\n"
         "/server fullstack <front_port> <backend_port> [api_prefix]\n"
