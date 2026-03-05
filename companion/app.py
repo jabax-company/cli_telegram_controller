@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -56,6 +58,7 @@ from companion.handlers.messages import (
 )
 
 logger = logging.getLogger(__name__)
+POLLING_RETRY_DELAY_SECS = 5
 
 
 async def _watchdog_loop(app: Application) -> None:
@@ -99,7 +102,11 @@ def main() -> None:
         .build()
     )
 
+    stop_requested = False
+
     def _external_stop(reason: str) -> None:
+        nonlocal stop_requested
+        stop_requested = True
         logger.info("Stop requested (%s).", reason)
         if loop.is_closed():
             return
@@ -139,11 +146,26 @@ def main() -> None:
         "Claude Code Companion (local-mode) started. Authorized user: %s",
         TELEGRAM_USER_ID,
     )
+    network_issue_reported = False
     try:
-        app.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=["message", "callback_query"],
-        )
+        while not stop_requested:
+            try:
+                app.run_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=["message", "callback_query"],
+                )
+                break
+            except NetworkError as exc:
+                if not network_issue_reported:
+                    logger.warning(
+                        "Telegram network error detected (%s). Retrying every %ss.",
+                        exc,
+                        POLLING_RETRY_DELAY_SECS,
+                    )
+                    network_issue_reported = True
+                else:
+                    logger.debug("Polling retry after network error: %s", exc)
+                time.sleep(POLLING_RETRY_DELAY_SECS)
     except KeyboardInterrupt:
         logger.info("Ctrl+C received. Stopping bot...")
     finally:

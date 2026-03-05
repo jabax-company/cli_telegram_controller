@@ -235,7 +235,7 @@ Relevantes para este flujo:
 - `INITIAL_DIR` (opcional)
 - `RESTRICT_PATHS` (opcional; restringe a `cwd` cuando el CLI lo soporte)
 - `SAFE_MODE` (opcional, por defecto `true`; bloquea comandos destructivos)
-- `INACTIVITY_TIMEOUT_SECS` (opcional, por defecto `900`; cierra Claude + server tras inactividad)
+- `INACTIVITY_TIMEOUT_SECS` (opcional, por defecto `1800`; cierra Claude + server tras inactividad)
 - `INACTIVITY_CHECK_SECS` (opcional, por defecto `30`; frecuencia del watchdog de inactividad)
 - `MAX_IMAGE_HISTORY` (opcional, por defecto `50`; maximo de imagenes recordadas por chat)
 - `MAX_PENDING_IMAGES` (opcional, por defecto `10`; maximo de imagenes pendientes por usar)

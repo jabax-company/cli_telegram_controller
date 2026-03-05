@@ -182,7 +182,11 @@ async def keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
             state = get_state(chat_id)
             if not state["session_active"]:
                 return
-            await context.bot.send_message(chat_id, "Still working...")
+            try:
+                await context.bot.send_message(chat_id, "Still working...")
+            except Exception as exc:
+                # Network hiccups should not kill the keepalive task.
+                logger.debug("keepalive[%s] send failed: %s", chat_id, exc)
     except asyncio.CancelledError:
         pass
 

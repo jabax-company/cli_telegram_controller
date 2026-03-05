@@ -26,7 +26,7 @@ RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
 SAFE_MODE = os.environ.get("SAFE_MODE", "true").lower() == "true"
 _extra_blocked = os.environ.get("BLOCKED_PATTERNS", "")
 EXTRA_BLOCKED = [p.strip() for p in _extra_blocked.split(",") if p.strip()]
-INACTIVITY_TIMEOUT_SECS = int(os.environ.get("INACTIVITY_TIMEOUT_SECS", "900"))
+INACTIVITY_TIMEOUT_SECS = int(os.environ.get("INACTIVITY_TIMEOUT_SECS", "1800"))
 INACTIVITY_CHECK_SECS = int(os.environ.get("INACTIVITY_CHECK_SECS", "30"))
 MAX_IMAGE_HISTORY = int(os.environ.get("MAX_IMAGE_HISTORY", "50"))
 MAX_PENDING_IMAGES = int(os.environ.get("MAX_PENDING_IMAGES", "10"))

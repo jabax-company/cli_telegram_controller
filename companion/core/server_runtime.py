@@ -987,141 +987,72 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     state["extra_procs"] = []
 
     if not args:
-        port = SERVE_PORT
-        await update.effective_message.reply_text(
-            f"Starting static server in {cwd}\n"
-            f"Local URL: http://127.0.0.1:{port}\n"
-            "Public Cloudflare URL will appear in a moment."
-        )
-        app_proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "http.server",
-            str(port),
-            "--bind",
-            "127.0.0.1",
-            "--directory",
-            cwd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        await asyncio.sleep(0.7)
-        if app_proc.returncode is not None:
+        server_config = _load_server_config(cwd)
+        fe_cfg = (server_config or {}).get("frontend") or {}
+        preferred_port = int(fe_cfg.get("port", SERVE_PORT))
+
+        front_ready = await wait_for_port(preferred_port, timeout=2.5)
+        front_probe = await probe_http(preferred_port, "/") if front_ready else HttpProbe(False, 0, "", "")
+        front_conflict = front_ready and not _looks_like_frontend_http(front_probe)
+        effective_port = preferred_port
+        if front_conflict:
+            effective_port = find_available_port(preferred_port)
             await update.effective_message.reply_text(
-                f"Failed to start static server on port {port}."
+                f"Port {preferred_port} is in use by a non-web service. Using {effective_port} instead."
+            )
+            front_ready = False
+
+        if front_ready:
+            state["mode"] = "frontend"
+            state["extra_procs"] = []
+            try:
+                target_url = await _origin_url_for_port(effective_port)
+                await update.effective_message.reply_text(
+                    f"Frontend already running on port {effective_port}.\n"
+                    "Public Cloudflare URL will appear in a moment."
+                )
+                await start_tunnel(chat_id, target_url, context.bot, app_proc=None)
+            except Exception as e:
+                await update.effective_message.reply_text(f"Failed to start tunnel: {e}")
+            return
+
+        front_spec = detect_frontend_launch(cwd, frontend_port=effective_port, server_config=server_config)
+        if not front_spec:
+            await update.effective_message.reply_text(
+                "No frontend detected in current directory.\n"
+                "Add a package.json with a 'dev' script, an index.html, "
+                "or run /server claude set to create .claude/server.json."
             )
             return
-        state["mode"] = "static"
-        try:
-            await start_tunnel(
-                chat_id, f"http://127.0.0.1:{port}", context.bot, app_proc=app_proc
-            )
-        except Exception as e:
+
+        command = front_spec.command
+        forced_hint = ""
+        if _looks_like_node_dev_command(command) and "--port" not in command.lower():
             try:
-                app_proc.kill()
+                effective_port = find_available_port(effective_port)
             except Exception:
                 pass
-            await update.effective_message.reply_text(f"Failed to start tunnel: {e}")
-        return
-
-    if args[0].lower() == "proxy":
-        if len(args) != 2:
-            await update.effective_message.reply_text("Usage: /server proxy <port>")
-            return
-        try:
-            port = int(args[1])
-        except ValueError:
-            await update.effective_message.reply_text("Port must be an integer.")
-            return
-        await update.effective_message.reply_text(
-            f"Publishing existing local service on port {port}..."
-        )
-        if not await wait_for_port(port, timeout=8):
-            await update.effective_message.reply_text(
-                f"No local service detected on 127.0.0.1:{port}."
-            )
-            return
-        state["mode"] = "proxy"
-        state["extra_procs"] = []
-        try:
-            await start_tunnel(
-                chat_id, f"http://127.0.0.1:{port}", context.bot, app_proc=None
-            )
-        except Exception as e:
-            await update.effective_message.reply_text(f"Failed to start tunnel: {e}")
-        return
-
-    if args[0].lower() == "run":
-        if len(args) < 2:
-            await update.effective_message.reply_text(
-                "Usage: /server run <command>\n"
-                "       /server run auto <command>\n"
-                "       /server run <port> <command>"
-            )
-            return
-        expected_port: int | None = None
-        run_args = args[1:]
-        first_token = run_args[0].strip().lower()
-        command_parts: list[str]
-        if first_token == "auto":
-            command_parts = run_args[1:]
-        else:
-            try:
-                expected_port = int(first_token)
-                if expected_port < 1 or expected_port > 65535:
-                    await update.effective_message.reply_text("Port must be between 1 and 65535.")
-                    return
-                command_parts = run_args[1:]
-            except ValueError:
-                # Port omitted -> auto-detect mode.
-                expected_port = None
-                command_parts = run_args
-
-        if not command_parts:
-            await update.effective_message.reply_text(
-                "Usage: /server run <command>\n"
-                "       /server run auto <command>\n"
-                "       /server run <port> <command>"
-            )
-            return
-
-        command = " ".join(command_parts)
-        forced_port_hint = ""
-        if expected_port is None and _looks_like_node_dev_command(command):
-            try:
-                expected_port = find_available_port(_DEFAULT_DEV_PORT)
-            except Exception:
-                expected_port = _DEFAULT_DEV_PORT
-            command, forced = _inject_dev_server_port(command, expected_port)
+            command, forced = _inject_dev_server_port(command, effective_port)
             if forced:
-                forced_port_hint = (
-                    f"\nDev port forced to: {expected_port} "
-                    "(added --port)"
-                )
-        expected_label = str(expected_port) if expected_port is not None else "auto-detect"
+                forced_hint = f" (--port {effective_port} injected)"
         await update.effective_message.reply_text(
-            f"Starting app command in {cwd}\n"
-            f"Command: {command}\n"
-            f"Expected port: {expected_label}{forced_port_hint}"
+            f"Starting frontend\n"
+            f"Dir: {front_spec.workdir}\n"
+            f"Command: {command}{forced_hint}\n"
+            "Detecting port..."
         )
         env = os.environ.copy()
-        if expected_port is not None:
-            env["PORT"] = str(expected_port)
+        env["PORT"] = str(effective_port)
         env.setdefault("HOST", "127.0.0.1")
         app_proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=cwd,
+            command.replace("{port}", str(effective_port)),
+            cwd=front_spec.workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
-        await update.effective_message.reply_text(
-            "Command started. Detecting app port..."
-        )
         detected_port, startup_lines, err = await _detect_launched_service_port(
-            app_proc,
-            expected_port=expected_port,
-            timeout=50.0,
+            app_proc, expected_port=effective_port, timeout=50.0
         )
         if err or detected_port is None:
             try:
@@ -1129,32 +1060,20 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception:
                 pass
             details = _format_startup_lines(startup_lines)
-            extra = f"\nStartup logs (tail):\n{details}" if details else ""
+            extra = f"\nStartup logs:\n{details}" if details else ""
             await update.effective_message.reply_text(
-                f"Could not detect app port for command.\n"
-                f"{err or 'Unknown startup failure.'}{extra}"
+                f"Could not detect frontend port.\n{err or 'Unknown error.'}{extra}"
             )
             return
         if app_proc.stdout is not None:
             state["app_output_task"] = asyncio.get_running_loop().create_task(
-                _drain_stream(app_proc.stdout, chat_id, label="run-app")
+                _drain_stream(app_proc.stdout, chat_id, label="frontend")
             )
-        if expected_port is not None and detected_port != expected_port:
-            await update.effective_message.reply_text(
-                f"Detected app port {detected_port} (expected {expected_port}). "
-                "I will publish the detected port."
-            )
-        if expected_port is None:
-            await update.effective_message.reply_text(
-                f"Detected app port {detected_port}. Publishing it now."
-            )
-        state["mode"] = "run"
+        state["mode"] = "frontend"
         state["extra_procs"] = []
         try:
             target_url = await _origin_url_for_port(detected_port)
-            await start_tunnel(
-                chat_id, target_url, context.bot, app_proc=app_proc
-            )
+            await start_tunnel(chat_id, target_url, context.bot, app_proc=app_proc)
         except Exception as e:
             try:
                 app_proc.kill()
@@ -1170,16 +1089,8 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if args[0].lower() == "fullstack":
         server_config = _load_server_config(cwd)
         if len(args) == 1:
-            # no-arg mode: require .claude/server.json
-            if not server_config:
-                await update.effective_message.reply_text(
-                    "No .claude/server.json found.\n"
-                    "Run /server claude set to create it automatically, or provide ports:\n"
-                    "/server fullstack <front_port> <back_port> [api_prefix]"
-                )
-                return
-            fe_cfg = server_config.get("frontend") or {}
-            be_cfg = server_config.get("backend") or {}
+            fe_cfg = (server_config or {}).get("frontend") or {}
+            be_cfg = (server_config or {}).get("backend") or {}
             front_port = int(fe_cfg.get("port", 3000))
             backend_port = int(be_cfg.get("port", 5000))
             api_prefix = str(be_cfg.get("api_prefix", "/api"))
@@ -1369,36 +1280,35 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if args[0].lower() == "help":
         server_config = _load_server_config(cwd)
         config_status = (
-            f".claude/server.json found — config is active."
+            ".claude/server.json found — config is active."
             if server_config
-            else "No .claude/server.json yet — run /server claude set to create it."
+            else "No .claude/server.json — run /server claude set to create it."
         )
         fmt = (
-            "The bot reads .claude/server.json at the repo root to deploy.\n"
-            f"{config_status}\n\n"
-            "Expected file format:\n"
+            "Server commands\n\n"
+            "/server\n"
+            "  Auto-detect and deploy the frontend via Cloudflare tunnel.\n"
+            "  Starts npm/pnpm/yarn dev server or serves static HTML.\n"
+            "  Port is selected automatically (free port, --port injected for dev servers).\n\n"
+            "/server fullstack\n"
+            "  Auto-detect and deploy frontend + backend under one tunnel URL.\n"
+            "  Reads ports/commands from .claude/server.json if present,\n"
+            "  otherwise defaults to front:3000 backend:5000 api_prefix:/api.\n\n"
+            "/server fullstack <front_port> <back_port> [api_prefix]\n"
+            "  Same as above but with explicit port overrides.\n\n"
+            "/server claude set\n"
+            "  Ask Claude to analyze the project and create .claude/server.json.\n\n"
+            "/server status  — show current tunnel URL and mode\n"
+            "/server stop    — stop tunnel and any auto-started processes\n"
+            "/server help    — show this help\n\n"
+            f"Config: {config_status}\n\n"
+            ".claude/server.json format:\n"
             "{\n"
-            '  "frontend": {\n'
-            '    "dir": "frontend",\n'
-            '    "cmd": "npm run dev",\n'
-            '    "port": 3000\n'
-            "  },\n"
-            '  "backend": {\n'
-            '    "dir": "backend",\n'
-            '    "cmd": "npm run dev",\n'
-            '    "port": 5000,\n'
-            '    "api_prefix": "/api"\n'
-            "  }\n"
-            "}\n\n"
-            "Rules:\n"
-            "- Use {port} in cmd if it takes port as argument\n"
-            "  (e.g. python -m http.server {port} --bind 127.0.0.1)\n"
-            "  Otherwise PORT env var is set automatically.\n"
-            "- Omit frontend or backend key if not present.\n\n"
-            "Commands:\n"
-            "/server claude set  — Claude creates .claude/server.json for this project\n"
-            "/server fullstack   — deploy using .claude/server.json\n"
-            "/server fullstack <front_port> <back_port> [api_prefix]  — override ports"
+            '  "frontend": { "dir": "frontend", "cmd": "npm run dev", "port": 3000 },\n'
+            '  "backend":  { "dir": "backend",  "cmd": "npm run dev", "port": 5000, "api_prefix": "/api" }\n'
+            "}\n"
+            "Use {port} in cmd if port is a positional arg;\n"
+            "otherwise PORT env var is set automatically."
         )
         await update.effective_message.reply_text(fmt)
         return
@@ -1406,10 +1316,6 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.effective_message.reply_text(
         "Usage:\n"
         "/server\n"
-        "/server proxy <port>\n"
-        "/server run <command>\n"
-        "/server run auto <command>\n"
-        "/server run <port> <command>\n"
         "/server fullstack\n"
         "/server fullstack <front_port> <backend_port> [api_prefix]\n"
         "/server claude set\n"
