@@ -22,6 +22,10 @@ DEFAULT_BASE = ROOT_DIR
 BASE_DIR = Path(os.path.expanduser(os.environ.get("INITIAL_DIR", str(DEFAULT_BASE)))).resolve()
 INITIAL_DIR = str(BASE_DIR)
 
+# AI engine: "claude" (default) or "codex" (OpenAI Codex CLI)
+AI_ENGINE = os.environ.get("AI_ENGINE", "claude").strip().lower()
+CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()  # e.g. "o4-mini", "o3"
+
 RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
 SAFE_MODE = os.environ.get("SAFE_MODE", "true").lower() == "true"
 _extra_blocked = os.environ.get("BLOCKED_PATTERNS", "")
@@ -64,7 +68,15 @@ RUN_GUIDE_APPEND_SYSTEM_PROMPT = (
     "If the project has frontend and backend, provide explicit commands for both, "
     "where to run them (repo root or subfolder), expected ports, and the matching "
     "Telegram publish command /server fullstack <front_port> <backend_port> "
-    "(with api_prefix if needed)."
+    "(with api_prefix if needed).\n\n"
+    "CRITICAL RULE for frontend+backend projects: "
+    "The frontend JavaScript must ALWAYS use relative API URLs (e.g. fetch('/api/items')) "
+    "and NEVER use absolute URLs with localhost or a hardcoded port "
+    "(e.g. NEVER fetch('http://localhost:5000/api/items')). "
+    "Absolute localhost URLs break when the app is accessed remotely via a tunnel. "
+    "If the frontend uses Vite, add a server.proxy entry in vite.config.js/ts so that "
+    "local development also works: proxy '/api' (or the api prefix) to http://localhost:<backend_port>. "
+    "Apply this rule to every fetch, axios, or HTTP client call in the frontend code."
 )
 
 DATA_DIR = Path.home() / ".claude_code_bot"

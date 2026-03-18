@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from companion.core.config import BASE_DIR, INITIAL_DIR
+from companion.core.config import AI_ENGINE, BASE_DIR, CODEX_MODEL, INITIAL_DIR
 
 sessions: dict[int, dict] = {}
 serve_sessions: dict[int, dict] = {}
@@ -36,6 +36,12 @@ def blank_state() -> dict:
         "browse_path": None,
         "browse_page": 0,
         "last_interaction": time.monotonic(),
+        # scheduling accumulation mode
+        "at_mode": False,
+        "at_draft": None,  # {"run_at": str, "cwd": str, "parts": [], "task_type": str}
+        # AI engine (per-chat, overrides global AI_ENGINE env var)
+        "ai_engine": AI_ENGINE,   # "claude" or "codex"
+        "ai_model": CODEX_MODEL,  # model override (mainly for codex)
     }
 
 
@@ -44,6 +50,10 @@ def _ensure_state_shape(state: dict) -> None:
     state.setdefault("pending_images", [])
     state.setdefault("image_history", [])
     state.setdefault("last_interaction", time.monotonic())
+    state.setdefault("at_mode", False)
+    state.setdefault("at_draft", None)
+    state.setdefault("ai_engine", AI_ENGINE)
+    state.setdefault("ai_model", CODEX_MODEL)
 
 
 def get_state(chat_id: int) -> dict:

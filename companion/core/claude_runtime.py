@@ -11,8 +11,12 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import ContextTypes
 
+import html
+
 from companion.core.config import (
+    AI_ENGINE,
     BACKEND_RUNBOOK_APPEND_SYSTEM_PROMPT,
+    CODEX_MODEL,
     DISALLOWED_BASH_TOOLS,
     ENFORCE_BACKEND_RUNBOOK,
     FLUSH_INTERVAL,
@@ -110,11 +114,18 @@ async def output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Non
             text_buf = ""
         last_flush = loop.time()
 
+    output_format = state.get("output_format", "json")
+
     def _handle_line(raw: str) -> None:
         nonlocal text_buf
         raw = raw.strip()
         if not raw:
             return
+
+        if output_format == "plain":
+            text_buf += raw + "\n"
+            return
+
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError:
@@ -197,6 +208,7 @@ async def spawn_claude(
     state = get_state(chat_id)
     cwd = str(Path(state["cwd"]).resolve())
     state["cwd"] = cwd
+    state["output_format"] = "json"
 
     cmd = [
         "claude",
@@ -243,6 +255,40 @@ async def spawn_claude(
     state["keepalive_task"] = loop.create_task(keepalive(chat_id, context))
 
 
+async def spawn_codex(
+    chat_id: int, prompt: str, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Spawn an OpenAI Codex CLI process."""
+    state = get_state(chat_id)
+    cwd = str(Path(state["cwd"]).resolve())
+    state["cwd"] = cwd
+    state["output_format"] = "plain"
+    # Codex sessions are not resumable — clear any stale session_id
+    state["session_id"] = None
+    state["inject_resume_next"] = False
+
+    # Model: per-chat override first, then global CODEX_MODEL
+    model = state.get("ai_model") or CODEX_MODEL
+    cmd = ["codex", "--approval-mode", "full-auto", "-q"]
+    if model:
+        cmd += ["--model", model]
+    cmd.append(prompt)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=cwd,
+    )
+    state["proc"] = proc
+    state["session_active"] = True
+
+    loop = asyncio.get_running_loop()
+    state["output_task"] = loop.create_task(output_reader(chat_id, context))
+    state["keepalive_task"] = loop.create_task(keepalive(chat_id, context))
+
+
 async def run_task(
     chat_id: int,
     prompt: str,
@@ -252,16 +298,33 @@ async def run_task(
     state = get_state(chat_id)
     cwd = str(Path(state["cwd"]).resolve())
     state["cwd"] = cwd
-    msg = await update.effective_message.reply_text(f"Starting Claude Code in {cwd}...")
+
+    # Engine resolved per-chat (set via /engine), falls back to global AI_ENGINE
+    engine = state.get("ai_engine") or AI_ENGINE
+    engine_label = "Codex" if engine == "codex" else "Claude Code"
+    msg = await update.effective_message.reply_text(
+        f"<b>Iniciando {engine_label}</b>\n<code>{html.escape(cwd)}</code>",
+        parse_mode="HTML",
+    )
     try:
-        await spawn_claude(chat_id, prompt, context)
+        if engine == "codex":
+            await spawn_codex(chat_id, prompt, context)
+        else:
+            await spawn_claude(chat_id, prompt, context)
         await msg.edit_text(
-            f"Claude Code running in {cwd}.\n"
-            "Output streams below. /stop to interrupt, /reset to kill."
+            f"<b>{engine_label} activo</b> en <code>{html.escape(cwd)}</code>\n"
+            "<i>/stop para interrumpir · /reset para reiniciar</i>",
+            parse_mode="HTML",
         )
     except FileNotFoundError:
+        binary = "codex" if engine == "codex" else "claude"
         await msg.edit_text(
-            "Failed: `claude` command not found. Install Claude Code and ensure it is in PATH."
+            f"<b>Error:</b> comando <code>{binary}</code> no encontrado.\n"
+            "Instala el CLI y asegúrate de que está en el PATH.",
+            parse_mode="HTML",
         )
     except Exception as e:
-        await msg.edit_text(f"Failed to start Claude Code: {e}")
+        await msg.edit_text(
+            f"<b>Error al iniciar {engine_label}:</b>\n<code>{html.escape(str(e))}</code>",
+            parse_mode="HTML",
+        )

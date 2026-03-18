@@ -223,6 +223,33 @@ async def _dispatch_unparsed_command(update: Update, context: ContextTypes.DEFAU
     return True
 
 
+async def _add_to_at_draft(state: dict, text: str, msg, source: str = "texto") -> None:
+    """Accumulate text into the at_draft and acknowledge."""
+    draft = state.get("at_draft")
+    if draft is None:
+        state["at_mode"] = False
+        await msg.reply_text("Error interno: borrador perdido. Usa /at HH:MM para reiniciar.")
+        return
+
+    # Detect /bash prefix inside accumulation
+    if text.startswith("/bash "):
+        draft["task_type"] = "bash"
+        text = text[len("/bash "):].strip()
+
+    draft["parts"].append(text)
+    part_num = len(draft["parts"])
+
+    from datetime import datetime
+    run_at = datetime.fromisoformat(draft["run_at"])
+    preview = text[:120] + ("..." if len(text) > 120 else "")
+    await msg.reply_text(
+        f"Parte {part_num} añadida ({source})\n"
+        f"Hora programada: {run_at.strftime('%d/%m %H:%M')} | Dir: {draft['cwd']}\n"
+        f"Preview: {preview}\n\n"
+        "Sigue enviando mensajes/audios o /at done para guardar."
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
@@ -234,6 +261,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     state = get_state(chat_id)
     text = (msg.text or "").strip()
     if not text:
+        return
+
+    # ── Scheduling accumulation mode (bypasses session_active) ────────────
+    if state.get("at_mode"):
+        await _add_to_at_draft(state, text, msg)
         return
 
     if state["pending_confirm"]:
@@ -287,6 +319,18 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     chat_id = update.effective_chat.id
     state = get_state(chat_id)
+
+    # ── Scheduling accumulation mode (bypasses session_active) ────────────
+    if state.get("at_mode"):
+        progress = await msg.reply_text("Transcribiendo audio para tarea programada...")
+        try:
+            text = await transcribe_telegram_audio(update, context)
+        except Exception as e:
+            await progress.edit_text(f"Error de transcripción: {e}")
+            return
+        await progress.edit_text(f"Transcrito: {text[:300]}")
+        await _add_to_at_draft(state, text, msg, source="audio")
+        return
 
     if state["pending_confirm"]:
         await msg.reply_text("Please reply YES or cancel first.")

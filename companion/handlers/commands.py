@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import subprocess
 from pathlib import Path
@@ -17,7 +18,7 @@ from companion.core.claude_runtime import (
     output_reader,
     run_task,
 )
-from companion.core.config import BASE_DIR
+from companion.core.config import AI_ENGINE, BASE_DIR
 from companion.core.paths import resolve_path
 from companion.core.prompt_optimizer import clear_prompt_intake
 from companion.core.runtime_control import request_stop
@@ -100,34 +101,49 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     if not is_authorized(update):
         return
-    state = get_state(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    state = get_state(chat_id)
+    engine = (state.get("ai_engine") or AI_ENGINE).upper()
+
+    keyboard = [
+        [
+            InlineKeyboardButton("📁 Explorar carpetas", callback_data="quick:paths"),
+            InlineKeyboardButton("📋 Proyectos", callback_data="quick:projects"),
+        ],
+        [
+            InlineKeyboardButton("📊 Estado", callback_data="quick:status"),
+            InlineKeyboardButton("🕐 Programadas", callback_data="quick:scheduled"),
+        ],
+        [
+            InlineKeyboardButton(
+                "✅ CLAUDE" if engine == "CLAUDE" else "Claude Code",
+                callback_data="engine:claude",
+            ),
+            InlineKeyboardButton(
+                "✅ CODEX" if engine == "CODEX" else "Codex",
+                callback_data="engine:codex",
+            ),
+        ],
+    ]
+
     await update.effective_message.reply_text(
-        "Claude Code Companion\n\n"
-        f"Base dir: {state['base_dir']}\n"
-        f"Current dir: {state['cwd']}\n\n"
-        "Workflow:\n"
-        "1) Send /claude to start prompt mode.\n"
-        "2) Send your prompt.\n"
-        "3) Answer 3 to 5 optimization questions.\n"
-        "4) Send /claude again to execute optimized prompt.\n\n"
-        "Image flow:\n"
-        "- Send an image and it is saved in repo root /images.\n"
-        "- If image has no caption, bot waits for your next prompt and includes it.\n"
-        "- Use <image> in text to explicitly reference the latest stored image.\n\n"
-        "Key commands:\n"
-        "/base [path|reset] - show or change base directory\n"
-        "/cd <path-or-name> - change directory\n"
-        "/3d <path-or-name> - alias of /cd (voice-friendly)\n"
-        "/branch <name> - create/switch branch and lock Claude changes to it\n"
-        "/claude - run pending prompt\n"
-        "/claude <text> - run explicit prompt now\n"
-        "/paths [path] - browse folders with buttons\n"
-        "/server - auto-detect and deploy frontend\n"
-        "/server fullstack - auto-detect and deploy frontend + backend\n"
-        "/bot stop - stop the Telegram bot process\n"
-        "/status - Claude /status in Claude mode, bot status otherwise\n"
-        "/status bot - force bot status\n"
-        "/help - full command list"
+        f"<b>AI Code Companion</b>  <i>[{engine}]</i>\n\n"
+        f"<b>Dir actual:</b> <code>{html.escape(state['cwd'])}</code>\n\n"
+        "<b>Flujo rápido:</b>\n"
+        "1. Selecciona carpeta con 📁 o <code>/cd &lt;ruta&gt;</code>\n"
+        "2. Envía <code>/claude &lt;prompt&gt;</code> para ejecutar\n"
+        "   — o <code>/claude</code> para el modo asistido con preguntas\n"
+        "3. Texto, audio y fotos se aceptan como prompt\n\n"
+        "<b>Comandos esenciales:</b>\n"
+        "<code>/cd &lt;ruta&gt;</code>  — cambiar directorio\n"
+        "<code>/claude &lt;prompt&gt;</code>  — ejecutar con IA\n"
+        "<code>/bash &lt;cmd&gt;</code>  — ejecutar shell\n"
+        "<code>/at HH:MM &lt;prompt&gt;</code>  — programar tarea\n"
+        "<code>/branch &lt;nombre&gt;</code>  — rama Git y bloqueo\n"
+        "<code>/server</code>  — publicar web vía Cloudflare\n\n"
+        "<code>/help</code> para la referencia completa de comandos.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -136,49 +152,57 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
     state = get_state(update.effective_chat.id)
+    engine = AI_ENGINE.upper()
     await update.effective_message.reply_text(
-        "Command reference\n\n"
-        f"Base dir: {state['base_dir']}\n"
-        f"Current dir: {state['cwd']}\n\n"
-        "Navigation\n"
-        "/cd - go to base dir\n"
-        "/cd <path-or-name> - change directory\n"
-        "/3d - alias of /cd\n"
-        "/base [path|reset] - show or change base directory\n"
-        "/mkdir <name> - create and enter folder\n"
-        "/paths [path] - interactive folder browser\n"
-        "/projects - list saved projects\n"
-        "/save <name> - save current directory\n\n"
-        "Execution\n"
-        "/branch <name> - create/switch branch and lock Claude changes to it\n"
-        "/branch off - clear branch lock\n"
-        "/claude - run pending prompt\n"
-        "/claude <prompt> - run immediately\n"
-        "/plan <task> - ask Claude to plan only\n"
-        "/bash <cmd> - run shell command in current dir\n"
-        "/stop - stop running process\n"
-        "/reset - clear running process and context\n\n"
-        "Preview\n"
-        "/server - auto-detect and deploy frontend via Cloudflare tunnel\n"
-        "/server fullstack - auto-detect and deploy frontend + backend\n"
-        "/server fullstack <front_port> <backend_port> [api_prefix] - with explicit ports\n"
-        "/server claude set - ask Claude to create .claude/server.json\n"
-        "/server help - full server command reference\n"
-        "/server status - show tunnel status\n"
-        "/server stop - stop tunnel\n\n"
-        "Bot control\n"
-        "/bot stop - stop this bot process\n\n"
-        "Status behavior\n"
-        "In Claude mode, /status is passed through to Claude.\n"
-        "Use /status bot to show Telegram bot local state.\n\n"
-        "Voice\n"
-        "Send a Telegram voice/audio message to transcribe with local faster-whisper.\n"
-        "The transcript is saved as pending prompt; run with /claude.\n"
-        "Default local model is 'small' (configurable via WHISPER_MODEL).\n\n"
-        "Images\n"
-        "Send a photo/image-document and it is stored under repo root /images.\n"
-        "If sent while Claude mode is active, caption text runs immediately with image context.\n"
-        "Without caption, the image is queued for your next prompt."
+        f"<b>Referencia de comandos</b>  <i>[Motor: {engine}]</i>\n\n"
+        f"<b>Dir base:</b> <code>{html.escape(state['base_dir'])}</code>\n"
+        f"<b>Dir actual:</b> <code>{html.escape(state['cwd'])}</code>\n\n"
+
+        "<b>── Navegación ──────────────────</b>\n"
+        "<code>/cd</code>  — ir al dir base\n"
+        "<code>/cd &lt;ruta&gt;</code>  — cambiar directorio\n"
+        "<code>/base [ruta|reset]</code>  — ver/cambiar directorio base\n"
+        "<code>/paths [ruta]</code>  — explorador de carpetas interactivo\n"
+        "<code>/projects</code>  — listar proyectos guardados\n"
+        "<code>/save &lt;nombre&gt;</code>  — guardar directorio actual\n\n"
+
+        "<b>── Ejecución IA ─────────────────</b>\n"
+        "<code>/claude</code>  — ejecutar prompt pendiente con Claude Code\n"
+        "<code>/claude &lt;prompt&gt;</code>  — ejecutar directamente con Claude Code\n"
+        "<code>/codex</code>  — ejecutar prompt pendiente con Codex\n"
+        "<code>/codex &lt;prompt&gt;</code>  — ejecutar directamente con Codex\n"
+        "<code>/bash &lt;cmd&gt;</code>  — comando shell en dir actual\n"
+        "<code>/branch &lt;nombre&gt;</code>  — crear/cambiar rama Git y bloquear\n"
+        "<code>/branch off</code>  — quitar bloqueo de rama\n"
+        "<code>/exit</code>  — salir del modo Claude\n"
+        "<code>/stop</code>  — interrumpir ejecución\n"
+        "<code>/reset</code>  — borrar proceso y contexto\n\n"
+
+        "<b>── Tareas programadas ───────────</b>\n"
+        "<code>/at HH:MM &lt;prompt&gt;</code>  — programar ahora\n"
+        "<code>/at HH:MM</code>  — modo acumulación (texto + audio)\n"
+        "<code>/at HH:MM DD/MM &lt;prompt&gt;</code>  — fecha específica\n"
+        "<code>/at HH:MM /bash &lt;cmd&gt;</code>  — programar bash\n"
+        "<code>/at done</code>  — guardar acumulación\n"
+        "<code>/scheduled</code>  — ver tareas pendientes\n"
+        "<code>/unschedule &lt;id&gt;</code>  — cancelar tarea\n\n"
+
+        "<b>── Publicar web ─────────────────</b>\n"
+        "<code>/server</code>  — publicar dir actual vía Cloudflare\n"
+        "<code>/server proxy &lt;puerto&gt;</code>  — tunel a app ya activa\n"
+        "<code>/server fullstack</code>  — frontend + backend\n"
+        "<code>/server status</code>  — estado del túnel\n"
+        "<code>/server stop</code>  — parar túnel\n\n"
+
+        "<b>── Control del bot ──────────────</b>\n"
+        "<code>/status</code>  — estado de sesión y directorio\n"
+        "<code>/bot stop</code>  — apagar el bot\n\n"
+
+        "<b>── Entrada multimedia ───────────</b>\n"
+        "🎤 <i>Audio</i>  — se transcribe y guarda como prompt\n"
+        "🖼 <i>Imagen</i>  — se guarda en <code>images/</code>; con caption ejecuta directo\n"
+        "   Usa <code>&lt;image&gt;</code> en el prompt para referenciar la última imagen",
+        parse_mode="HTML",
     )
 
 
@@ -202,27 +226,42 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await run_task(chat_id, prompt, context, update)
         return
 
-    icon = "ACTIVE" if state["session_active"] else "IDLE"
-    has_ctx = bool(state.get("session_id"))
-    pending = "yes" if state.get("pending_prompt") else "no"
+    engine = (state.get("ai_engine") or AI_ENGINE).upper()
+    ai_model = state.get("ai_model") or ""
+    model_hint = f" · <code>{html.escape(ai_model)}</code>" if ai_model else ""
+    session_icon = "🟢 ACTIVO" if state["session_active"] else "⚪ INACTIVO"
+    has_ctx = "sí (/reset para limpiar)" if state.get("session_id") else "no"
+    pending = "sí" if state.get("pending_prompt") else "no"
     pending_images = len(state.get("pending_images") or [])
-    intake = "ACTIVE" if state.get("prompt_intake_active") else "IDLE"
+    intake = "activo" if state.get("prompt_intake_active") else "—"
+    at_mode = "activo" if state.get("at_mode") else "—"
     branch_lock = state.get("branch_lock")
     branch_repo = state.get("branch_repo")
     if branch_lock and branch_repo:
-        branch_line = f"{branch_lock} ({branch_repo})"
+        branch_line = f"<code>{html.escape(branch_lock)}</code> en <code>{html.escape(branch_repo)}</code>"
     else:
-        branch_line = "none"
+        branch_line = "—"
+    at_draft = state.get("at_draft")
+    at_info = ""
+    if at_draft:
+        from datetime import datetime
+        run_at = datetime.fromisoformat(at_draft["run_at"])
+        at_info = (
+            f"\n<b>Borrador /at:</b> {run_at.strftime('%d/%m %H:%M')} "
+            f"({len(at_draft.get('parts', []))} partes)"
+        )
     await update.effective_message.reply_text(
-        "Status\n"
-        f"Base dir: {state['base_dir']}\n"
-        f"Directory: {state['cwd']}\n"
-        f"Session: {icon}\n"
-        f"Prompt mode: {intake}\n"
-        f"Context resumable: {has_ctx}\n"
-        f"Pending prompt: {pending}\n"
-        f"Pending images: {pending_images}\n"
-        f"Branch lock: {branch_line}"
+        f"<b>Estado</b>  <i>[{engine}{model_hint}]</i>\n\n"
+        f"<b>Sesión:</b> {session_icon}\n"
+        f"<b>Dir base:</b> <code>{html.escape(state['base_dir'])}</code>\n"
+        f"<b>Dir actual:</b> <code>{html.escape(state['cwd'])}</code>\n"
+        f"<b>Contexto resumible:</b> {has_ctx}\n"
+        f"<b>Prompt pendiente:</b> {pending}\n"
+        f"<b>Imágenes pendientes:</b> {pending_images}\n"
+        f"<b>Modo intake:</b> {intake}\n"
+        f"<b>Modo acumulación:</b> {at_mode}{at_info}\n"
+        f"<b>Rama bloqueada:</b> {branch_line}",
+        parse_mode="HTML",
     )
 
 
@@ -377,25 +416,6 @@ async def cmd_base(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def cmd_mkdir(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_authorized(update):
-        return
-    if not context.args:
-        await update.effective_message.reply_text("Usage: /mkdir <folder-name>")
-        return
-    chat_id = update.effective_chat.id
-    state = get_state(chat_id)
-    name = " ".join(context.args)
-    new_path = os.path.join(state["cwd"], name)
-    already_existed = os.path.isdir(new_path)
-    try:
-        os.makedirs(new_path, exist_ok=True)
-    except Exception as e:
-        await update.effective_message.reply_text(f"Could not create directory: {e}")
-        return
-    state["cwd"] = str(Path(new_path).resolve())
-    verb = "Already exists" if already_existed else "Created"
-    await update.effective_message.reply_text(f"{verb}, switched to: {state['cwd']}")
 
 
 async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -458,33 +478,51 @@ async def cmd_paths(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(text, reply_markup=markup)
 
 
-async def cmd_claude(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_authorized(update):
-        return
+async def _cmd_run_with_engine(
+    engine: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Shared execution logic for /claude and /codex."""
     chat_id = update.effective_chat.id
     state = get_state(chat_id)
 
     if state["session_active"]:
-        await update.effective_message.reply_text("Claude is already running. Use /stop first.")
+        await update.effective_message.reply_text(
+            f"<b>{engine.upper()}</b> ya está en ejecución. Usa /stop primero.",
+            parse_mode="HTML",
+        )
         return
 
+    # Set engine for this run (and remember it as the active engine)
+    state["ai_engine"] = engine
+    # Codex does not support session resuming
+    if engine == "codex":
+        state["session_id"] = None
+        state["inject_resume_next"] = False
+
+    label = "Codex" if engine == "codex" else "Claude Code"
     explicit_prompt = " ".join(context.args).strip() if context.args else ""
 
     if not explicit_prompt:
         state["claude_mode"] = True
-        state["inject_resume_next"] = bool(state.get("session_id"))
+        if engine == "claude":
+            state["inject_resume_next"] = bool(state.get("session_id"))
         clear_prompt_intake(state)
-        ctx_hint = " Previous context active (--resume)." if state.get("session_id") else ""
-        resume_hint = " I will inject /resume in your next Claude message." if state.get("session_id") else ""
+        ctx_hint = ""
+        if engine == "claude" and state.get("session_id"):
+            ctx_hint = "\n<i>Contexto previo activo (--resume). Inyectaré /resume en tu próximo mensaje.</i>"
         await update.effective_message.reply_text(
-            f"Claude mode active in {state['cwd']}.\n"
-            f"Every message goes directly to Claude.{ctx_hint}{resume_hint}\n"
-            "/exit to leave."
+            f"<b>Modo {label}</b> activo en <code>{html.escape(state['cwd'])}</code>{ctx_hint}\n"
+            "Cada mensaje va directamente al motor de IA.\n"
+            "<code>/exit</code> para salir.",
+            parse_mode="HTML",
         )
         return
 
     state["claude_mode"] = True
-    state["inject_resume_next"] = bool(state.get("session_id"))
+    if engine == "claude":
+        state["inject_resume_next"] = bool(state.get("session_id"))
     clear_prompt_intake(state)
 
     ok, msg = await _ensure_branch_lock(state)
@@ -498,15 +536,28 @@ async def cmd_claude(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if matched is not None:
         state["pending_confirm"] = explicit_prompt
         await update.effective_message.reply_text(
-            "Blocked pattern detected.\n"
-            f"Match: {matched}\n"
-            "Reply YES to run anyway, or anything else to cancel."
+            "Patrón bloqueado detectado.\n"
+            f"Match: <code>{html.escape(matched)}</code>\n"
+            "Responde <b>YES</b> para ejecutar de todas formas.",
+            parse_mode="HTML",
         )
         return
 
     prompt = maybe_inject_resume_prompt(state, explicit_prompt)
-    audit(chat_id, f"PROMPT: {prompt}")
+    audit(chat_id, f"PROMPT [{engine.upper()}]: {prompt}")
     await run_task(chat_id, prompt, context, update)
+
+
+async def cmd_claude(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    await _cmd_run_with_engine("claude", update, context)
+
+
+async def cmd_codex(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    await _cmd_run_with_engine("codex", update, context)
 
 
 async def cmd_exit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -523,29 +574,6 @@ async def cmd_exit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(f"Exited Claude mode.{ctx_hint}")
 
 
-async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_authorized(update):
-        return
-    if not context.args:
-        await update.effective_message.reply_text("Usage: /plan <task description>")
-        return
-    chat_id = update.effective_chat.id
-    state = get_state(chat_id)
-    if state["session_active"]:
-        await update.effective_message.reply_text("A session is already active. Use /stop or /reset.")
-        return
-    task = " ".join(context.args)
-    prompt = (
-        "Please plan the following task step by step. "
-        "Do NOT execute code, modify files, or run commands.\n\n"
-        f"{task}"
-    )
-    clear_prompt_intake(state)
-    state["pending_prompt"] = prompt
-    audit(chat_id, f"PENDING_PLAN: {task}")
-    await update.effective_message.reply_text(
-        "Plan prompt saved. Send /claude to execute it."
-    )
 
 
 async def cmd_bash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -623,6 +651,269 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("Session reset. Context cleared.")
 
 
+async def _finalize_at_draft(update: Update, state: dict, chat_id: int, *, auto: bool = False) -> bool:
+    """Save the accumulated draft as a scheduled task. Returns True if a task was saved."""
+    from companion.core.scheduler import add_task
+    draft = state.get("at_draft")
+    if not draft or not draft.get("parts"):
+        state["at_mode"] = False
+        state["at_draft"] = None
+        if not auto:
+            await update.effective_message.reply_text(
+                "No hay contenido acumulado. Envía mensajes o audios antes de /at done."
+            )
+        return False
+
+    from datetime import datetime
+    prompt = "\n\n".join(draft["parts"])
+    task_type = draft.get("task_type", "claude")
+    cwd = draft["cwd"]
+    run_at = datetime.fromisoformat(draft["run_at"])
+    label = draft.get("label") or ""
+
+    task_id = add_task(chat_id, cwd, run_at, task_type, prompt, label)
+    state["at_mode"] = False
+    state["at_draft"] = None
+
+    time_str = run_at.strftime("%d/%m/%Y %H:%M")
+    prefix = "Auto-guardado: " if auto else ""
+    await update.effective_message.reply_text(
+        f"{prefix}Tarea guardada [{task_id}]\n"
+        f"Hora: {time_str}\n"
+        f"Tipo: {task_type} | Dir: {cwd}\n"
+        f"Partes: {len(draft['parts'])} | Prompt ({len(prompt)} chars):\n{prompt[:400]}"
+    )
+    return True
+
+
+async def cmd_at(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    from companion.core.scheduler import add_task, parse_at_args, parse_at_time
+
+    chat_id = update.effective_chat.id
+    state = get_state(chat_id)
+    args = context.args or []
+
+    # ── /at done / /at fin → finalizar borrador acumulado ─────────────────
+    if args and args[0].lower() in ("done", "end", "fin", "ok", "listo", "confirmar", "save"):
+        await _finalize_at_draft(update, state, chat_id)
+        return
+
+    # ── /at (sin args) → mostrar estado del modo acumulación ──────────────
+    if not args:
+        draft = state.get("at_draft")
+        if state.get("at_mode") and draft:
+            from datetime import datetime
+            run_at = datetime.fromisoformat(draft["run_at"])
+            parts_preview = "\n---\n".join(p[:100] for p in draft.get("parts", []))
+            await update.effective_message.reply_text(
+                f"Modo acumulación activo para las {run_at.strftime('%d/%m %H:%M')}\n"
+                f"Directorio: {draft['cwd']}\n"
+                f"Partes acumuladas: {len(draft.get('parts', []))}\n\n"
+                f"{parts_preview or '(vacío)'}\n\n"
+                "Envía mensajes/audios para seguir acumulando.\n"
+                "/at done para guardar | /at HH:MM para nueva hora"
+            )
+        else:
+            await update.effective_message.reply_text(
+                "Uso:\n"
+                "  /at HH:MM <prompt>           → programar ahora\n"
+                "  /at HH:MM                    → modo acumulación (mensajes + audios)\n"
+                "  /at HH:MM DD/MM <prompt>     → programar en fecha específica\n"
+                "  /at 22:00 /bash git pull      → comando bash\n"
+                "  /at done                      → guardar borrador acumulado\n"
+                "  /scheduled                    → ver tareas pendientes\n\n"
+                "Flujo multi-repo:\n"
+                "  1. /cd proyecto_A → /at 14:00 → envía mensajes\n"
+                "  2. /at done       → guarda tarea A\n"
+                "  3. /cd proyecto_B → /at 15:00 → envía mensajes\n"
+                "  4. /at done       → guarda tarea B\n"
+                "  (Cada proyecto ejecuta en su propio proceso independiente)"
+            )
+        return
+
+    # ── Parsear hora (+fecha opcional) ────────────────────────────────────
+    run_at, prompt, error = parse_at_args(args)
+    if error:
+        await update.effective_message.reply_text(
+            f"{error}\n\n"
+            "Ejemplos:\n"
+            "  /at 14:30 implementa el login con OAuth\n"
+            "  /at 09:00 20/03 refactoriza el módulo de pagos\n"
+            "  /at 22:00 /bash git pull && git status\n"
+            "  /at 14:30  (sin prompt → modo acumulación)"
+        )
+        return
+
+    assert run_at is not None
+
+    # ── Sin prompt → entrar en modo acumulación ────────────────────────────
+    if not prompt:
+        # Si hay un borrador existente con contenido, guardarlo primero
+        if state.get("at_mode") and state.get("at_draft") and state["at_draft"].get("parts"):
+            await _finalize_at_draft(update, state, chat_id, auto=True)
+
+        state["at_mode"] = True
+        state["at_draft"] = {
+            "run_at": run_at.isoformat(),
+            "cwd": state["cwd"],
+            "parts": [],
+            "task_type": "claude",
+            "label": "",
+        }
+        time_str = run_at.strftime("%d/%m/%Y %H:%M")
+        await update.effective_message.reply_text(
+            f"Modo acumulación activado para las {time_str}\n"
+            f"Directorio: {state['cwd']}\n\n"
+            "Ahora envía los mensajes o audios que quieras acumular.\n"
+            "Envía /bash al inicio del mensaje para marcar como comando shell.\n"
+            "Usa /at done cuando termines.\n"
+            "Cambia de proyecto con /cd <path> y abre otro /at <hora> para otra tarea."
+        )
+        return
+
+    # ── Con prompt → programar directamente ───────────────────────────────
+    if prompt.startswith("/bash "):
+        task_type = "bash"
+        prompt = prompt[len("/bash "):].strip()
+    else:
+        task_type = "claude"
+
+    task_id = add_task(chat_id, state["cwd"], run_at, task_type, prompt)
+    time_str = run_at.strftime("%d/%m/%Y %H:%M")
+    await update.effective_message.reply_text(
+        f"Tarea programada [{task_id}]\n"
+        f"Hora: {time_str}\n"
+        f"Tipo: {task_type} | Dir: {state['cwd']}\n"
+        f"Prompt: {prompt[:300]}"
+    )
+
+
+async def cmd_scheduled(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    del context
+    if not is_authorized(update):
+        return
+    from companion.core.scheduler import list_tasks
+
+    chat_id = update.effective_chat.id
+    tasks = list_tasks(chat_id)
+    if not tasks:
+        await update.effective_message.reply_text(
+            "No hay tareas programadas.\nUsa /at HH:MM <prompt> para programar una."
+        )
+        return
+
+    lines = []
+    for t in tasks:
+        from datetime import datetime
+        run_at = datetime.fromisoformat(t["run_at"])
+        time_str = run_at.strftime("%d/%m/%Y %H:%M")
+        preview = t["prompt"][:80] + ("..." if len(t["prompt"]) > 80 else "")
+        lines.append(f"[{t['id']}] {time_str} ({t['type']})\n  {preview}")
+
+    await update.effective_message.reply_text(
+        f"Tareas programadas ({len(tasks)}):\n\n" + "\n\n".join(lines) +
+        "\n\nUsa /unschedule <id> para cancelar."
+    )
+
+
+async def cmd_unschedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    from companion.core.scheduler import cancel_task
+
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Uso: /unschedule <id>\nUsa /scheduled para ver los IDs."
+        )
+        return
+
+    chat_id = update.effective_chat.id
+    task_id = context.args[0].strip()
+    removed = cancel_task(chat_id, task_id)
+    if removed:
+        await update.effective_message.reply_text(f"Tarea [{task_id}] cancelada.")
+    else:
+        await update.effective_message.reply_text(
+            f"No se encontró la tarea [{task_id}].\nUsa /scheduled para ver las tareas activas."
+        )
+
+
+async def cmd_engine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Switch AI engine per-chat: /engine · /engine claude · /engine codex [model]"""
+    if not is_authorized(update):
+        return
+    chat_id = update.effective_chat.id
+    state = get_state(chat_id)
+    args = context.args or []
+
+    current_engine = state.get("ai_engine", "claude")
+    current_model = state.get("ai_model", "") or ""
+
+    # /engine — show current engine with switch buttons
+    if not args:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        model_hint = f" · <code>{html.escape(current_model)}</code>" if current_model else ""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ Claude Code" if current_engine == "claude" else "Claude Code",
+                    callback_data="engine:claude",
+                ),
+                InlineKeyboardButton(
+                    "✅ Codex" if current_engine == "codex" else "Codex",
+                    callback_data="engine:codex",
+                ),
+            ]
+        ]
+        await update.effective_message.reply_text(
+            f"<b>Motor de IA activo:</b> <code>{current_engine.upper()}</code>{model_hint}\n\n"
+            "Pulsa para cambiar o usa:\n"
+            "<code>/engine claude</code>\n"
+            "<code>/engine codex</code>\n"
+            "<code>/engine codex o4-mini</code>  — con modelo específico",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    new_engine = args[0].lower()
+    if new_engine not in ("claude", "codex"):
+        await update.effective_message.reply_text(
+            "<b>Motor no reconocido.</b> Usa <code>claude</code> o <code>codex</code>.\n\n"
+            "Ejemplos:\n"
+            "<code>/engine claude</code>\n"
+            "<code>/engine codex</code>\n"
+            "<code>/engine codex o4-mini</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    new_model = args[1] if len(args) > 1 else ""
+
+    if state.get("session_active"):
+        await update.effective_message.reply_text(
+            "<b>Hay una sesión activa.</b> Usa /stop o /reset antes de cambiar el motor.",
+            parse_mode="HTML",
+        )
+        return
+
+    state["ai_engine"] = new_engine
+    state["ai_model"] = new_model
+    # Codex sessions are not resumable — clear context when switching away from claude
+    if new_engine == "codex":
+        state["session_id"] = None
+        state["inject_resume_next"] = False
+
+    model_hint = f" · modelo <code>{html.escape(new_model)}</code>" if new_model else ""
+    await update.effective_message.reply_text(
+        f"<b>Motor cambiado a {new_engine.upper()}</b>{model_hint}\n"
+        "<i>El cambio aplica a la próxima ejecución.</i>",
+        parse_mode="HTML",
+    )
+
+
 async def cmd_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
@@ -652,17 +943,21 @@ __all__ = [
     "cmd_status",
     "cmd_cd",
     "cmd_base",
-    "cmd_mkdir",
     "cmd_paths",
     "cmd_projects",
     "cmd_save",
     "cmd_branch",
     "cmd_claude",
+    "cmd_codex",
     "cmd_exit",
-    "cmd_plan",
     "cmd_bash",
     "cmd_stop",
     "cmd_reset",
     "cmd_bot",
+    "cmd_at",
+    "cmd_engine",
+    "cmd_scheduled",
+    "cmd_unschedule",
+    "_finalize_at_draft",
     "run_task",
 ]

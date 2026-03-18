@@ -26,29 +26,33 @@ from companion.core.config import (
     TRAY_ICON_ENABLED,
 )
 from companion.core.runtime_control import clear_stop_callback, register_stop_callback
+from companion.core.scheduler import scheduler_loop
 from companion.core.server_runtime import cmd_server
 from companion.core.server_runtime import stop_serve
 from companion.core.state import get_state, known_chat_ids
 from companion.core.tray_icon import start_tray_icon
 from companion.handlers.callbacks import handle_callback
 from companion.handlers.commands import (
+    cmd_at,
     cmd_bot,
     cmd_base,
     cmd_branch,
     cmd_bash,
     cmd_cd,
     cmd_claude,
+    cmd_codex,
+    cmd_engine,
     cmd_exit,
     cmd_help,
-    cmd_mkdir,
     cmd_paths,
-    cmd_plan,
     cmd_projects,
     cmd_reset,
     cmd_save,
+    cmd_scheduled,
     cmd_start,
     cmd_status,
     cmd_stop,
+    cmd_unschedule,
 )
 from companion.handlers.messages import (
     handle_audio,
@@ -75,14 +79,17 @@ async def _watchdog_loop(app: Application) -> None:
 async def _post_init(app: Application) -> None:
     task = asyncio.create_task(_watchdog_loop(app), name="inactivity_watchdog")
     app.bot_data["inactivity_watchdog_task"] = task
+    sched_task = asyncio.create_task(scheduler_loop(app.bot), name="scheduler_loop")
+    app.bot_data["scheduler_task"] = sched_task
 
 
 async def _post_shutdown(app: Application) -> None:
-    task = app.bot_data.pop("inactivity_watchdog_task", None)
-    if task and not task.done():
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+    for key in ("inactivity_watchdog_task", "scheduler_task"):
+        task = app.bot_data.pop(key, None)
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
     for chat_id in known_chat_ids():
         state = get_state(chat_id)
         with contextlib.suppress(Exception):
@@ -121,21 +128,23 @@ def main() -> None:
     app.add_handler(CommandHandler("bot", cmd_bot))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cd", cmd_cd))
-    app.add_handler(CommandHandler("3d", cmd_cd))
     app.add_handler(CommandHandler("base", cmd_base))
-    app.add_handler(CommandHandler("mkdir", cmd_mkdir))
     app.add_handler(CommandHandler("paths", cmd_paths))
     app.add_handler(CommandHandler("projects", cmd_projects))
     app.add_handler(CommandHandler("save", cmd_save))
     app.add_handler(CommandHandler("branch", cmd_branch))
     app.add_handler(CommandHandler("claude", cmd_claude))
+    app.add_handler(CommandHandler("codex", cmd_codex))
+    app.add_handler(CommandHandler("engine", cmd_engine))
+    app.add_handler(CommandHandler("ai", cmd_engine))
     app.add_handler(CommandHandler("exit", cmd_exit))
-    app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("bash", cmd_bash))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("server", cmd_server))
-    app.add_handler(CommandHandler("serve", cmd_server))
+    app.add_handler(CommandHandler("at", cmd_at))
+    app.add_handler(CommandHandler("scheduled", cmd_scheduled))
+    app.add_handler(CommandHandler("unschedule", cmd_unschedule))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.COMMAND, handle_command_passthrough))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
