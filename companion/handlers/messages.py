@@ -15,18 +15,33 @@ from companion.core.auth import is_authorized
 from companion.core.prompt_optimizer import (
     answered_question_count,
     build_optimized_prompt,
+    enhance_prompt_with_ai,
     next_question_text,
     question_count_range,
     record_answer_and_advance,
 )
 from companion.core.claude_runtime import run_task
-from companion.core.config import IMAGES_DIR, MAX_IMAGE_HISTORY, MAX_PENDING_IMAGES, ROOT_DIR
+from companion.core.config import IMAGES_DIR, MAX_IMAGE_HISTORY, MAX_PENDING_IMAGES, PROMPT_ENHANCE_ENABLED, ROOT_DIR
 from companion.core.security import blocked_match
 from companion.core.server_runtime import cmd_server
 from companion.core.state import get_state, maybe_inject_resume_prompt
 from companion.core.storage import audit
 
 _IMAGE_PLACEHOLDER_RE = re.compile(r"<\s*images?\s*>", flags=re.IGNORECASE)
+
+
+async def _maybe_enhance(prompt: str, cwd: str, msg) -> str:
+    """If PROMPT_ENHANCE_ENABLED, improve the prompt with AI and notify the user."""
+    if not PROMPT_ENHANCE_ENABLED:
+        return prompt
+    notice = await msg.reply_text("✨ Mejorando prompt...")
+    enhanced = await enhance_prompt_with_ai(prompt, cwd)
+    preview = enhanced if len(enhanced) <= 600 else enhanced[:600] + "..."
+    try:
+        await notice.edit_text(f"✨ <b>Prompt mejorado:</b>\n\n{preview}", parse_mode="HTML")
+    except Exception:
+        pass
+    return enhanced
 
 
 def _normalize_image_extension(
@@ -299,6 +314,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
         prompt, _ = _prepare_prompt_with_images(state, text)
+        prompt = await _maybe_enhance(prompt, state["cwd"], msg)
         prompt = maybe_inject_resume_prompt(state, prompt)
         audit(chat_id, f"CLAUDE_MODE: {prompt}")
         await run_task(chat_id, prompt, context, update)
@@ -328,7 +344,8 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception as e:
             await progress.edit_text(f"Error de transcripción: {e}")
             return
-        await progress.edit_text(f"Transcrito: {text[:300]}")
+        preview_at = text[:300] + (f"\n…({len(text)} chars totales)" if len(text) > 300 else "")
+        await progress.edit_text(f"Transcrito: {preview_at}")
         await _add_to_at_draft(state, text, msg, source="audio")
         return
 
@@ -352,7 +369,8 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await progress.edit_text(f"Audio transcription failed: {e}")
         return
 
-    await progress.edit_text(f"Transcribed:\n{text[:800]}")
+    preview = text[:800] + (f"\n\n…({len(text)} chars totales, preview truncado)" if len(text) > 800 else "")
+    await progress.edit_text(f"Transcribed:\n{preview}")
 
     if state.get("claude_mode"):
         matched = blocked_match(text)
@@ -365,6 +383,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
         prompt, _ = _prepare_prompt_with_images(state, text)
+        prompt = await _maybe_enhance(prompt, state["cwd"], msg)
         prompt = maybe_inject_resume_prompt(state, prompt)
         audit(chat_id, f"CLAUDE_MODE_AUDIO: {prompt}")
         await run_task(chat_id, prompt, context, update)
@@ -428,6 +447,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
         prompt, _ = _prepare_prompt_with_images(state, caption)
+        prompt = await _maybe_enhance(prompt, state["cwd"], msg)
         prompt = maybe_inject_resume_prompt(state, prompt)
         audit(chat_id, f"CLAUDE_MODE_IMAGE: {prompt}")
         await run_task(chat_id, prompt, context, update)

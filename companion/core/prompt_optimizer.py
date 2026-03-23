@@ -2,53 +2,91 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from typing import Final
 
 from companion.core.config import BACKEND_RUNBOOK_FILE
 
+logger = logging.getLogger(__name__)
+
+
+async def enhance_prompt_with_ai(raw_text: str, cwd: str) -> str:
+    """Call Claude to rewrite raw_text as a precise, actionable Claude Code prompt.
+
+    Returns the enhanced prompt, or the original text if enhancement fails.
+    """
+    meta_prompt = (
+        "You are an expert in prompt engineering for Claude Code. "
+        "Your only task is to rewrite the following text as a clear, precise, and actionable prompt "
+        "for a code agent to execute directly. "
+        "Do not add explanations, headers, or extra text — return ONLY the improved prompt.\n\n"
+        f"Working directory: {cwd}\n\n"
+        f"Original text:\n{raw_text}"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "--dangerously-skip-permissions",
+            "-p", meta_prompt,
+            "--output-format", "json",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        raw = stdout.decode("utf-8", errors="replace").strip()
+        obj = json.loads(raw)
+        enhanced = (obj.get("result") or "").strip()
+        if enhanced:
+            return enhanced
+    except Exception as e:
+        logger.warning("enhance_prompt_with_ai failed: %s", e)
+    return raw_text
+
 QUESTION_TEXTS: Final[dict[str, str]] = {
-    "goal": "Cual es el resultado final exacto que quieres?",
-    "paths": "Que archivos/rutas concretas puedo tocar y cuales no?",
-    "constraints": "Que restricciones tecnicas debo respetar (framework, versiones, estilo, etc.)?",
-    "output_format": "Como quieres el formato de salida (solo cambios, explicacion breve, pasos, etc.)?",
-    "validation": "Como validamos que quedo bien (tests, comportamiento esperado, criterios de aceptacion)?",
+    "goal": "What is the exact final result you want?",
+    "paths": "Which specific files/paths can I touch and which ones cannot?",
+    "constraints": "What technical constraints must I respect (framework, versions, style, etc.)?",
+    "output_format": "How do you want the output format (changes only, brief explanation, steps, etc.)?",
+    "validation": "How do we validate it is correct (tests, expected behavior, acceptance criteria)?",
 }
 
 QUESTION_LABELS: Final[dict[str, str]] = {
-    "goal": "Resultado final",
-    "paths": "Archivos/rutas permitidas y prohibidas",
-    "constraints": "Restricciones tecnicas",
-    "output_format": "Formato de salida esperado",
-    "validation": "Validacion/criterios de aceptacion",
+    "goal": "Final result",
+    "paths": "Allowed and forbidden files/paths",
+    "constraints": "Technical constraints",
+    "output_format": "Expected output format",
+    "validation": "Validation/acceptance criteria",
 }
 
 CORE_QUESTION_IDS: Final[list[str]] = ["goal", "paths", "constraints"]
 OPTIONAL_QUESTION_IDS: Final[list[str]] = ["output_format", "validation"]
 
 FORMAT_HINTS: Final[tuple[str, ...]] = (
-    "formato",
+    "format",
     "output",
-    "respuesta",
+    "response",
     "json",
     "markdown",
-    "tabla",
-    "solo cambios",
-    "pasos",
-    "explicacion",
-    "resumen",
+    "table",
+    "changes only",
+    "steps",
+    "explanation",
+    "summary",
 )
 
 VALIDATION_HINTS: Final[tuple[str, ...]] = (
     "test",
     "tests",
     "valid",
-    "criterio",
-    "aceptacion",
-    "esperado",
-    "verifica",
-    "verificar",
-    "comprobar",
-    "prueba",
+    "criteria",
+    "acceptance",
+    "expected",
+    "verify",
+    "check",
+    "validate",
+    "proof",
 )
 
 
@@ -103,7 +141,7 @@ def next_question_text(state: dict) -> str | None:
     text = QUESTION_TEXTS.get(qid)
     if not text:
         return None
-    return f"Pregunta {idx + 1}/{len(qids)}:\n{text}"
+    return f"Question {idx + 1}/{len(qids)}:\n{text}"
 
 
 def record_answer_and_advance(state: dict, answer: str) -> bool:
@@ -132,31 +170,31 @@ def build_optimized_prompt(state: dict, cwd: str) -> str:
         answers_by_id[qid] = answers[i].strip() if i < len(answers) else ""
 
     lines: list[str] = []
-    lines.append("Contexto de trabajo")
-    lines.append(f"- Directorio actual: {cwd}")
+    lines.append("Working context")
+    lines.append(f"- Current directory: {cwd}")
     lines.append("")
-    lines.append("Solicitud base del usuario")
+    lines.append("User base request")
     lines.append(draft)
     lines.append("")
-    lines.append("Requisitos refinados")
+    lines.append("Refined requirements")
     for qid in ["goal", "paths", "constraints", "output_format", "validation"]:
         label = QUESTION_LABELS[qid]
-        value = answers_by_id.get(qid, "").strip() or "No especificado"
+        value = answers_by_id.get(qid, "").strip() or "Not specified"
         lines.append(f"- {label}: {value}")
     lines.append("")
-    lines.append("Instrucciones de ejecucion")
+    lines.append("Execution instructions")
     lines.append(
-        "- Implementa los cambios en codigo de forma directa, manteniendo funcionalidad existente."
+        "- Implement code changes directly, preserving existing functionality."
     )
-    lines.append("- Explica brevemente que cambiaste y como validarlo.")
+    lines.append("- Briefly explain what you changed and how to validate it.")
     lines.append(
-        "- Si la tarea incluye backend/API/servidor, define y usa un comando explicito para "
-        "levantar backend (ejemplo: uv run python main.py o npm run dev). "
-        "Si no hay comando claro, pide confirmacion antes de continuar."
+        "- If the task involves a backend/API/server, define and use an explicit command to "
+        "start the backend (e.g. uv run python main.py or npm run dev). "
+        "If no clear command exists, ask for confirmation before continuing."
     )
     lines.append(
-        f"- Si hay backend/API, actualiza el archivo '{BACKEND_RUNBOOK_FILE}' en la raiz del repo "
-        "con JSON valido: {\"command\":\"...\", \"workdir\":\"...\", \"port\":..., \"api_prefix\":\"...\"}."
+        f"- If there is a backend/API, update the '{BACKEND_RUNBOOK_FILE}' file at the repo root "
+        "with valid JSON: {\"command\":\"...\", \"workdir\":\"...\", \"port\":..., \"api_prefix\":\"...\"}."
     )
 
     return "\n".join(lines).strip()

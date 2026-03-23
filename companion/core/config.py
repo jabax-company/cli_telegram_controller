@@ -105,6 +105,9 @@ KEEPALIVE_SECS = 30
 FLUSH_INTERVAL = 2.0
 FLUSH_SIZE = 500
 
+# When true, raw text/audio prompts are improved with a quick Claude call before execution
+PROMPT_ENHANCE_ENABLED = os.environ.get("PROMPT_ENHANCE_ENABLED", "false").lower() == "true"
+
 DISALLOWED_BASH_TOOLS: list[str] = [
     "Bash(rm:*)",
     "Bash(del:*)",

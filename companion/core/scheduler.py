@@ -142,7 +142,10 @@ async def _summarize_and_notify(
     """Ask Claude to briefly summarize the task output and send completion notification."""
     import json as _json
 
+    from companion.core.config import MAX_MSG
+
     summary = ""
+    summary_failed = False
     if full_output.strip():
         snippet = full_output[-3000:] if len(full_output) > 3000 else full_output
         summary_prompt = (
@@ -166,14 +169,35 @@ async def _summarize_and_notify(
             summary = obj.get("result", "").strip()
         except Exception as e:
             logger.warning("_summarize_and_notify[%s] summary failed: %s", task_id, e)
+            summary_failed = True
 
-    msg = f"✅ <b>Tarea [{task_id}] completada</b> — <code>{label}</code>"
+    header = f"✅ <b>Tarea [{task_id}] completada</b> — <code>{label}</code>"
     if summary:
-        msg += f"\n\n{summary}"
-    try:
-        await bot.send_message(chat_id, msg, parse_mode="HTML")
-    except Exception as e:
-        logger.warning("_summarize_and_notify[%s] send failed: %s", task_id, e)
+        msg = f"{header}\n\n{summary}"
+        try:
+            await bot.send_message(chat_id, msg, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("_summarize_and_notify[%s] send failed: %s", task_id, e)
+    elif summary_failed and full_output.strip():
+        # No AI available — send raw output instead
+        try:
+            await bot.send_message(chat_id, header, parse_mode="HTML")
+        except Exception:
+            pass
+        raw_out = full_output.strip()
+        chunk_size = MAX_MSG - 10
+        for i in range(0, len(raw_out), chunk_size):
+            chunk = raw_out[i:i + chunk_size]
+            try:
+                await bot.send_message(chat_id, chunk)
+            except Exception as e:
+                logger.warning("_summarize_and_notify[%s] raw chunk send failed: %s", task_id, e)
+                break
+    else:
+        try:
+            await bot.send_message(chat_id, header, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("_summarize_and_notify[%s] send failed: %s", task_id, e)
 
 
 async def _stream_output(bot, chat_id: int, proc, task_id: str, label: str) -> str:
