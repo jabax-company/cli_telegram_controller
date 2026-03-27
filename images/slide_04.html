@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 04 - Flujo de trabajo</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #080b14;
+    color: #fff;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 600px 400px at 100% 0%, rgba(99,102,241,0.1) 0%, transparent 60%),
+      radial-gradient(ellipse 500px 400px at 0% 100%, rgba(6,182,212,0.08) 0%, transparent 60%);
+  }
+
+  .header {
+    position: relative; z-index: 10;
+    padding: 44px 80px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-left {
+    display: flex; align-items: center; gap: 16px;
+  }
+  .header-tag {
+    background: rgba(52,211,153,0.15);
+    border: 1px solid rgba(52,211,153,0.35);
+    border-radius: 8px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #34d399;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .header h1 {
+    font-size: 34px; font-weight: 900; letter-spacing: -0.8px;
+  }
+  .legend {
+    display: flex; gap: 20px; align-items: center;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #64748b;
+  }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+  }
+
+  .flows {
+    position: relative; z-index: 10;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 0 80px;
+    flex: 1;
+    align-items: center;
+  }
+
+  .flow-card {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 18px;
+    padding: 24px 26px;
+  }
+  .flow-title {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 18px;
+  }
+  .flow-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px;
+  }
+  .fi1 { background: rgba(99,102,241,0.2); }
+  .fi2 { background: rgba(6,182,212,0.2); }
+  .fi3 { background: rgba(245,158,11,0.2); }
+  .fi4 { background: rgba(52,211,153,0.2); }
+
+  .flow-title h3 {
+    font-size: 15px; font-weight: 700; color: #e2e8f0;
+  }
+  .flow-title span {
+    font-size: 11px; font-weight: 500; color: #64748b;
+    background: rgba(255,255,255,0.05);
+    border-radius: 6px; padding: 2px 8px;
+  }
+
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    position: relative;
+  }
+  .step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 14px;
+    top: 28px;
+    bottom: -6px;
+    width: 2px;
+    background: rgba(255,255,255,0.06);
+  }
+  .step-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+  }
+  .s1 .step-num { background: rgba(99,102,241,0.25); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.4); }
+  .s2 .step-num { background: rgba(6,182,212,0.25); color: #67e8f9; border: 1px solid rgba(6,182,212,0.4); }
+  .s3 .step-num { background: rgba(245,158,11,0.25); color: #fcd34d; border: 1px solid rgba(245,158,11,0.4); }
+  .s4 .step-num { background: rgba(52,211,153,0.25); color: #6ee7b7; border: 1px solid rgba(52,211,153,0.4); }
+
+  .step-body {
+    padding: 4px 0 14px;
+    flex: 1;
+  }
+  .step-body .cmd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: #a5b4fc;
+    background: rgba(99,102,241,0.1);
+    border-radius: 6px;
+    padding: 3px 8px;
+    display: inline-block;
+    margin-bottom: 4px;
+  }
+  .step-body .cmd.cyan { color: #67e8f9; background: rgba(6,182,212,0.1); }
+  .step-body .cmd.amber { color: #fcd34d; background: rgba(245,158,11,0.1); }
+  .step-body .cmd.green { color: #6ee7b7; background: rgba(52,211,153,0.1); }
+  .step-body p {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.4;
+    margin-top: 2px;
+  }
+
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+  .slide-num {
+    position: absolute; bottom: 28px; left: 40px;
+    font-size: 12px; color: rgba(255,255,255,0.25); letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="header">
+    <div class="header-left">
+      <div class="header-tag">Workflow</div>
+      <h1>Flujos de trabajo</h1>
+    </div>
+  </div>
+
+  <div class="flows">
+
+    <!-- Flujo 1: Prompt básico -->
+    <div class="flow-card">
+      <div class="flow-title">
+        <div class="flow-icon fi1">✨</div>
+        <h3>Prompt con optimización</h3>
+        <span>Flujo recomendado</span>
+      </div>
+      <div class="steps">
+        <div class="step s1">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <span class="cmd">/cd C:\proyecto</span>
+            <p>Navegas al directorio del proyecto</p>
+          </div>
+        </div>
+        <div class="step s1">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <span class="cmd">/claude</span>
+            <p>Activa modo Claude + inicia Q&amp;A de refinamiento</p>
+          </div>
+        </div>
+        <div class="step s1">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <span class="cmd">Responde preguntas</span>
+            <p>Goal, rutas, constraints, formato, validación</p>
+          </div>
+        </div>
+        <div class="step s1">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <span class="cmd">/claude</span>
+            <p>Ejecuta el prompt optimizado → streaming de output</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flujo 2: Modo directo -->
+    <div class="flow-card">
+      <div class="flow-title">
+        <div class="flow-icon fi2">⚡</div>
+        <h3>Modo directo</h3>
+        <span>Ejecución inmediata</span>
+      </div>
+      <div class="steps">
+        <div class="step s2">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <span class="cmd cyan">/claude refactoriza el módulo auth.py</span>
+            <p>Ejecuta directamente sin Q&amp;A</p>
+          </div>
+        </div>
+        <div class="step s2">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <span class="cmd cyan">Sigue enviando mensajes</span>
+            <p>En modo Claude, cada texto se envía directamente a Claude</p>
+          </div>
+        </div>
+        <div class="step s2">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <span class="cmd cyan">/stop</span>
+            <p>Interrumpe si necesitas cambiar el rumbo</p>
+          </div>
+        </div>
+        <div class="step s2">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <span class="cmd cyan">/exit</span>
+            <p>Sale de modo Claude, vuelve al modo comando</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flujo 3: Con imagen -->
+    <div class="flow-card">
+      <div class="flow-title">
+        <div class="flow-icon fi3">🖼️</div>
+        <h3>Con imagen como contexto</h3>
+        <span>Multimodal</span>
+      </div>
+      <div class="steps">
+        <div class="step s3">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <span class="cmd amber">📸 Envía imagen sin caption</span>
+            <p>Se guarda en cola y queda pendiente</p>
+          </div>
+        </div>
+        <div class="step s3">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <span class="cmd amber">/claude implementa este diseño &lt;image&gt;</span>
+            <p>La imagen se adjunta automáticamente al prompt</p>
+          </div>
+        </div>
+        <div class="step s3">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <span class="cmd amber">Claude recibe imagen + texto</span>
+            <p>Usa la imagen como contexto visual para el código</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flujo 4: Deploy fullstack -->
+    <div class="flow-card">
+      <div class="flow-title">
+        <div class="flow-icon fi4">🌐</div>
+        <h3>Deploy fullstack</h3>
+        <span>Publicación web</span>
+      </div>
+      <div class="steps">
+        <div class="step s4">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <span class="cmd green">/server fullstack 3000 5000</span>
+            <p>El bot verifica/arranca front (3000) y back (5000)</p>
+          </div>
+        </div>
+        <div class="step s4">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <span class="cmd green">Reverse proxy local</span>
+            <p>/api/* → backend · resto → frontend</p>
+          </div>
+        </div>
+        <div class="step s4">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <span class="cmd green">https://xyz.trycloudflare.com</span>
+            <p>URL pública lista en segundos, sin cuenta Cloudflare</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">04 / 08</div>
+</body>
+</html>

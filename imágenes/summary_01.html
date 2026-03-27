@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Summary 01 — ¿Qué es CLI Telegram Controller?</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1280px; height: 720px;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
+    background: #080b14;
+    color: #fff;
+  }
+
+  /* Background */
+  .bg-grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,0.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .orb1 {
+    position: absolute;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(99,102,241,0.18) 0%, transparent 70%);
+    top: -180px; left: -80px;
+  }
+  .orb2 {
+    position: absolute;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(6,182,212,0.12) 0%, transparent 70%);
+    bottom: -100px; right: 100px;
+  }
+
+  /* Bottom gradient bar */
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+
+  /* Layout */
+  .slide {
+    position: relative; z-index: 10;
+    width: 1280px; height: 720px;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    padding: 40px 64px 46px;
+    gap: 0;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+  .header-left {}
+  .badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(99,102,241,0.15);
+    border: 1px solid rgba(99,102,241,0.4);
+    border-radius: 100px; padding: 4px 14px;
+    font-size: 11px; font-weight: 600;
+    color: #a5b4fc; letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .badge-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #6366f1; box-shadow: 0 0 6px #6366f1;
+  }
+  h1 {
+    font-size: 46px; font-weight: 900;
+    letter-spacing: -1.5px; line-height: 1.0;
+  }
+  h1 .grad {
+    background: linear-gradient(120deg, #a5b4fc 0%, #67e8f9 60%, #34d399 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle {
+    font-size: 17px; font-weight: 300; color: #94a3b8;
+    margin-top: 6px; letter-spacing: 0.01em;
+  }
+  .subtitle strong { color: #e2e8f0; font-weight: 600; }
+
+  .desc-pill {
+    align-self: flex-end;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 10px 18px;
+    font-size: 13px; color: #64748b; line-height: 1.5;
+    max-width: 320px; text-align: right;
+  }
+  .desc-pill strong { color: #94a3b8; }
+
+  /* Features grid */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .feat {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    position: relative;
+    overflow: hidden;
+  }
+  .feat::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  }
+  .f1::before { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
+  .f2::before { background: linear-gradient(90deg, #06b6d4, #0ea5e9); }
+  .f3::before { background: linear-gradient(90deg, #f59e0b, #f97316); }
+  .f4::before { background: linear-gradient(90deg, #a78bfa, #6366f1); }
+  .f5::before { background: linear-gradient(90deg, #34d399, #10b981); }
+  .f6::before { background: linear-gradient(90deg, #ec4899, #e879f9); }
+
+  .feat-icon {
+    font-size: 26px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .feat-body {}
+  .feat-body h3 {
+    font-size: 14px; font-weight: 700; color: #e2e8f0;
+    margin-bottom: 4px; line-height: 1.2;
+  }
+  .feat-body p {
+    font-size: 12px; color: #64748b; line-height: 1.45;
+  }
+
+  .slide-num {
+    position: absolute; bottom: 14px; left: 64px;
+    font-size: 11px; color: rgba(255,255,255,0.2); letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="orb1"></div>
+  <div class="orb2"></div>
+
+  <div class="slide">
+    <div class="header">
+      <div class="header-left">
+        <div class="badge"><span class="badge-dot"></span>Bot de Telegram · Claude Code · Codex</div>
+        <h1><span class="grad">CLI Telegram</span><br>Controller</h1>
+        <p class="subtitle">Tu <strong>CLI de IA</strong> en el bolsillo</p>
+      </div>
+      <div class="desc-pill">
+        Bot de Telegram que controla<br>
+        <strong>Claude Code</strong> y <strong>Codex CLI</strong> en tu máquina local.<br>
+        Texto · Voz · Imágenes · Git · Deploy.
+      </div>
+    </div>
+
+    <div class="features">
+      <div class="feat f1">
+        <div class="feat-icon">🤖</div>
+        <div class="feat-body">
+          <h3>Claude Code &amp; Codex CLI</h3>
+          <p>Streaming en tiempo real y <code style="font-size:11px;color:#a5b4fc;background:rgba(99,102,241,0.15);border-radius:4px;padding:1px 5px;">--resume</code> automático. Compatible con ambos CLIs</p>
+        </div>
+      </div>
+      <div class="feat f2">
+        <div class="feat-icon">🎙️</div>
+        <div class="feat-body">
+          <h3>Voz a texto</h3>
+          <p>Transcripción local con faster-whisper. Sin APIs externas, sin coste adicional</p>
+        </div>
+      </div>
+      <div class="feat f3">
+        <div class="feat-icon">🖼️</div>
+        <div class="feat-body">
+          <h3>Imágenes como contexto</h3>
+          <p>Adjunta fotos a tus prompts de código. Cola de imágenes pendientes con historial</p>
+        </div>
+      </div>
+      <div class="feat f4">
+        <div class="feat-icon">✨</div>
+        <div class="feat-body">
+          <h3>Optimizador de prompts</h3>
+          <p>Q&A interactivo que refina tu petición antes de enviarla: goal, rutas, constraints</p>
+        </div>
+      </div>
+      <div class="feat f5">
+        <div class="feat-icon">🌿</div>
+        <div class="feat-body">
+          <h3>Branch lock</h3>
+          <p>Bloquea el CLI a una rama Git específica. Cambia de repo → error automático</p>
+        </div>
+      </div>
+      <div class="feat f6">
+        <div class="feat-icon">🔒</div>
+        <div class="feat-body">
+          <h3>100% local y privado</h3>
+          <p>Solo tú (tu Telegram user ID) puede usarlo. Sin servidores intermedios</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">1 / 2</div>
+</body>
+</html>

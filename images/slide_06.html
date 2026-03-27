@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 06 - Deploy Web</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #080c15;
+    color: #fff;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 600px 400px at 80% 50%, rgba(52,211,153,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse 500px 400px at 20% 50%, rgba(6,182,212,0.07) 0%, transparent 60%);
+  }
+
+  .header {
+    position: relative; z-index: 10;
+    padding: 42px 80px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .header-tag {
+    background: rgba(52,211,153,0.12);
+    border: 1px solid rgba(52,211,153,0.3);
+    border-radius: 8px; padding: 5px 14px;
+    font-size: 12px; font-weight: 600; color: #34d399;
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .header h1 { font-size: 34px; font-weight: 900; letter-spacing: -0.8px; }
+
+  .main {
+    position: relative; z-index: 10;
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 32px;
+    padding: 0 80px 48px;
+    align-items: center;
+  }
+
+  .modes {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .mode-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .mode-letter {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800;
+    flex-shrink: 0;
+  }
+  .la { background: rgba(6,182,212,0.2); color: #67e8f9; }
+  .lb { background: rgba(245,158,11,0.2); color: #fcd34d; }
+  .lc { background: rgba(236,72,153,0.2); color: #f9a8d4; }
+  .ld { background: rgba(52,211,153,0.2); color: #6ee7b7; }
+
+  .mode-body h3 {
+    font-size: 14px; font-weight: 700; color: #e2e8f0;
+    margin-bottom: 4px;
+  }
+  .mode-body .code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: #94a3b8;
+    background: rgba(255,255,255,0.04);
+    border-radius: 6px;
+    padding: 3px 8px;
+    display: inline-block;
+    margin-bottom: 4px;
+  }
+  .mode-body p { font-size: 11.5px; color: #64748b; line-height: 1.4; }
+
+  /* Diagram */
+  .diagram {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 18px;
+    padding: 28px 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .diagram::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, #06b6d4, #34d399);
+  }
+
+  .diagram-title {
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: #34d399; margin-bottom: 24px;
+  }
+
+  .arch-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 16px;
+  }
+  .arch-row:last-child { margin-bottom: 0; }
+
+  .arch-box {
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 12px; font-weight: 600;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .ab-tele { background: rgba(6,182,212,0.15); border: 1px solid rgba(6,182,212,0.3); color: #67e8f9; width: 120px; }
+  .ab-bot  { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); color: #a5b4fc; width: 140px; }
+  .ab-proxy{ background: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.3); color: #fcd34d; width: 140px; }
+  .ab-cf   { background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3); color: #6ee7b7; width: 160px; }
+  .ab-front{ background: rgba(236,72,153,0.15); border: 1px solid rgba(236,72,153,0.3); color: #f9a8d4; width: 120px; }
+  .ab-back { background: rgba(139,92,246,0.15); border: 1px solid rgba(139,92,246,0.3); color: #c4b5fd; width: 120px; }
+
+  .arch-arrow {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #334155; font-size: 16px; padding: 0 6px;
+    position: relative;
+  }
+  .arch-arrow::after {
+    content: '';
+    position: absolute;
+    left: 10%; right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(100,116,139,0.4), transparent);
+  }
+
+  .arch-label {
+    position: absolute;
+    top: -10px;
+    font-size: 10px; color: #475569;
+    white-space: nowrap;
+    left: 50%; transform: translateX(-50%);
+  }
+
+  .detail-row {
+    display: flex; gap: 8px; margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .detail-chip {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 11px; color: #64748b;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .detail-chip strong { color: #94a3b8; }
+
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+  .slide-num {
+    position: absolute; bottom: 28px; left: 40px;
+    font-size: 12px; color: rgba(255,255,255,0.25); letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="header">
+    <div class="header-tag">Deploy</div>
+    <h1>Publicación web con Cloudflare</h1>
+  </div>
+
+  <div class="main">
+    <div class="modes">
+      <div class="mode-card">
+        <div class="mode-letter la">A</div>
+        <div class="mode-body">
+          <h3>Sitio estático</h3>
+          <span class="code">/server</span>
+          <p>Sirve la carpeta actual como HTML/CSS/JS estático</p>
+        </div>
+      </div>
+      <div class="mode-card">
+        <div class="mode-letter lb">B</div>
+        <div class="mode-body">
+          <h3>Proxy de servicio</h3>
+          <span class="code">/server proxy 5000</span>
+          <p>Expone localhost:5000 ya corriendo en una URL pública</p>
+        </div>
+      </div>
+      <div class="mode-card">
+        <div class="mode-letter lc">C</div>
+        <div class="mode-body">
+          <h3>Arrancar + publicar</h3>
+          <span class="code">/server run 3000 npm run dev</span>
+          <p>Ejecuta el comando y expone el puerto resultante</p>
+        </div>
+      </div>
+      <div class="mode-card">
+        <div class="mode-letter ld">D</div>
+        <div class="mode-body">
+          <h3>Fullstack (una URL)</h3>
+          <span class="code">/server fullstack 3000 5000</span>
+          <p>Front + back bajo un solo dominio. Auto-detecta comandos de arranque si los puertos no están activos</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <div class="diagram-title">Arquitectura fullstack</div>
+
+      <div class="arch-row">
+        <div class="arch-box ab-tele">📱 Telegram</div>
+        <div class="arch-arrow"><span class="arch-label">/server fullstack</span>→</div>
+        <div class="arch-box ab-bot">🤖 Bot Python</div>
+        <div class="arch-arrow"><span class="arch-label">spawn</span>→</div>
+        <div class="arch-box ab-proxy">🔀 Proxy :8080</div>
+      </div>
+
+      <div style="display:flex; gap:20px; margin: 16px 0 16px 260px;">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
+          <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+          <div class="arch-box ab-front">⚛️ Front :3000</div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
+          <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+          <div class="arch-box ab-back">🐍 Back :5000</div>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:0; margin-left:260px; margin-bottom:4px;">
+        <div class="arch-box ab-proxy" style="opacity:0;width:140px;">.</div>
+        <div class="arch-arrow" style="flex:1"><span class="arch-label">tunnel</span>→</div>
+        <div class="arch-box ab-cf">☁️ Cloudflare URL</div>
+      </div>
+
+      <div class="detail-row">
+        <div class="detail-chip">📡 <strong>trycloudflare.com</strong> · sin cuenta</div>
+        <div class="detail-chip">🔀 <strong>/api/*</strong> → backend</div>
+        <div class="detail-chip">🌍 <strong>resto</strong> → frontend</div>
+        <div class="detail-chip">⚡ <strong>HTTPS</strong> automático</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">06 / 08</div>
+</body>
+</html>

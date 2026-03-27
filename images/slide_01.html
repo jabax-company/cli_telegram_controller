@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 01 - Portada</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0a0a0f;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  /* Animated background grid */
+  .bg-grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,0.06) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  /* Glow orbs */
+  .orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.35;
+    animation: pulse 6s ease-in-out infinite;
+  }
+  .orb-1 { width: 600px; height: 600px; background: #6366f1; top: -150px; left: -100px; }
+  .orb-2 { width: 400px; height: 400px; background: #06b6d4; bottom: -100px; right: 100px; animation-delay: 2s; }
+  .orb-3 { width: 300px; height: 300px; background: #8b5cf6; top: 200px; right: 300px; animation-delay: 4s; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.25; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(1.05); }
+  }
+
+  .content {
+    position: relative;
+    z-index: 10;
+    text-align: center;
+    max-width: 900px;
+    padding: 40px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(99,102,241,0.15);
+    border: 1px solid rgba(99,102,241,0.4);
+    border-radius: 100px;
+    padding: 6px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #a5b4fc;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 28px;
+  }
+  .badge::before {
+    content: '';
+    width: 8px; height: 8px;
+    background: #6366f1;
+    border-radius: 50%;
+    box-shadow: 0 0 8px #6366f1;
+    animation: blink 2s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  h1 {
+    font-size: 72px;
+    font-weight: 900;
+    line-height: 1.05;
+    letter-spacing: -2px;
+    margin-bottom: 8px;
+  }
+  h1 .gradient {
+    background: linear-gradient(135deg, #a5b4fc 0%, #06b6d4 50%, #34d399 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .subtitle {
+    font-size: 22px;
+    font-weight: 300;
+    color: #94a3b8;
+    margin-bottom: 48px;
+    line-height: 1.5;
+  }
+  .subtitle strong { color: #e2e8f0; font-weight: 600; }
+
+  .pills {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #cbd5e1;
+  }
+  .pill .icon { font-size: 18px; }
+
+  .bottom-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+
+  .code-hint {
+    position: absolute;
+    bottom: 28px;
+    right: 40px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: rgba(99,102,241,0.6);
+    letter-spacing: 0.05em;
+  }
+
+  .slide-num {
+    position: absolute;
+    bottom: 28px;
+    left: 40px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.25);
+    letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+  <div class="content">
+    <div class="badge">Bot de Telegram · Claude Code · Codex CLI</div>
+
+    <h1>
+      <span class="gradient">CLI Telegram</span><br>
+      Controller
+    </h1>
+
+    <p class="subtitle">
+      Controla <strong>Claude Code</strong> y <strong>Codex CLI</strong> desde tu móvil.<br>
+      Texto · Voz · Imágenes · Publicación web · Git.
+    </p>
+
+    <div class="pills">
+      <div class="pill"><span class="icon">📱</span> Control remoto vía Telegram</div>
+      <div class="pill"><span class="icon">🎙️</span> Audio con Whisper local</div>
+      <div class="pill"><span class="icon">🌐</span> Deploy via Cloudflare</div>
+      <div class="pill"><span class="icon">🔒</span> 100% local · Sin servidores</div>
+    </div>
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">01 / 08</div>
+  <div class="code-hint">uv run python bot.py</div>
+</body>
+</html>

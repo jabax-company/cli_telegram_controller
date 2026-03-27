@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Summary 02 — Deploy y más</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1280px; height: 720px;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
+    background: #07090e;
+    color: #fff;
+  }
+
+  .bg-grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(52,211,153,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(52,211,153,0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .orb1 {
+    position: absolute;
+    width: 520px; height: 520px;
+    background: radial-gradient(circle, rgba(52,211,153,0.1) 0%, transparent 70%);
+    bottom: -200px; right: -80px;
+  }
+  .orb2 {
+    position: absolute;
+    width: 380px; height: 380px;
+    background: radial-gradient(circle, rgba(6,182,212,0.1) 0%, transparent 70%);
+    top: -100px; left: 200px;
+  }
+
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+
+  .slide {
+    position: relative; z-index: 10;
+    width: 1280px; height: 720px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    padding: 42px 64px 50px;
+  }
+
+  /* LEFT COLUMN */
+  .left {
+    display: flex; flex-direction: column; gap: 0;
+  }
+
+  .header-tag {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(52,211,153,0.12);
+    border: 1px solid rgba(52,211,153,0.35);
+    border-radius: 100px; padding: 4px 14px;
+    font-size: 11px; font-weight: 600;
+    color: #34d399; letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 12px; width: fit-content;
+  }
+
+  h1 {
+    font-size: 40px; font-weight: 900;
+    letter-spacing: -1.2px; line-height: 1.05;
+    margin-bottom: 8px;
+  }
+  h1 .grad {
+    background: linear-gradient(120deg, #34d399 0%, #06b6d4 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .tagline {
+    font-size: 14px; color: #64748b; margin-bottom: 22px; line-height: 1.5;
+  }
+  .tagline strong { color: #94a3b8; }
+
+  /* Server modes */
+  .modes { display: flex; flex-direction: column; gap: 10px; }
+
+  .mode {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px;
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .mode-letter {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; flex-shrink: 0;
+  }
+  .ma { background: rgba(6,182,212,0.2); color: #67e8f9; }
+  .mb { background: rgba(245,158,11,0.2); color: #fcd34d; }
+  .mc { background: rgba(236,72,153,0.2); color: #f9a8d4; }
+  .md { background: rgba(52,211,153,0.2); color: #6ee7b7; }
+
+  .mode-body { flex: 1; min-width: 0; }
+  .mode-body h3 { font-size: 13px; font-weight: 700; color: #e2e8f0; margin-bottom: 3px; }
+  .mode-cmd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px; color: #94a3b8;
+    background: rgba(0,0,0,0.3);
+    border-radius: 5px; padding: 2px 8px;
+    display: inline-block;
+  }
+  .mode-body p { font-size: 11.5px; color: #64748b; margin-top: 2px; }
+
+  /* RIGHT COLUMN */
+  .right {
+    display: flex; flex-direction: column; gap: 16px;
+  }
+
+  /* Cloudflare diagram box */
+  .cf-box {
+    background: rgba(52,211,153,0.04);
+    border: 1px solid rgba(52,211,153,0.2);
+    border-radius: 16px;
+    padding: 18px 20px;
+    flex: 1;
+  }
+  .cf-box-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: #34d399; margin-bottom: 14px;
+  }
+
+  .arch-row {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+  }
+  .arch-row:last-child { margin-bottom: 0; }
+
+  .arch-node {
+    border-radius: 8px; padding: 7px 12px;
+    font-size: 12px; font-weight: 600; text-align: center;
+    white-space: nowrap;
+  }
+  .an-tel { background: rgba(6,182,212,0.15); border: 1px solid rgba(6,182,212,0.3); color: #67e8f9; }
+  .an-bot { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); color: #a5b4fc; }
+  .an-px  { background: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.3); color: #fcd34d; }
+  .an-cf  { background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3); color: #6ee7b7; }
+  .an-fr  { background: rgba(236,72,153,0.12); border: 1px solid rgba(236,72,153,0.3); color: #f9a8d4; font-size: 11px; }
+  .an-bk  { background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.3); color: #c4b5fd; font-size: 11px; }
+
+  .arrow { color: #334155; font-size: 13px; flex-shrink: 0; }
+  .arrow-label { font-size: 10px; color: #475569; white-space: nowrap; }
+
+  .sub-row {
+    display: flex; gap: 8px; margin-left: 24px; margin-bottom: 10px;
+    align-items: center;
+  }
+  .sub-arrow { color: #334155; font-size: 11px; }
+
+  /* Stack */
+  .stack-box {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 16px 18px;
+  }
+  .stack-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: #64748b; margin-bottom: 10px;
+  }
+  .stack-chips {
+    display: flex; flex-wrap: wrap; gap: 7px;
+  }
+  .chip {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 7px; padding: 4px 11px;
+    font-size: 11.5px; font-weight: 600; color: #94a3b8;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Footer tagline */
+  .footer-tagline {
+    background: linear-gradient(90deg, rgba(99,102,241,0.1), rgba(6,182,212,0.1), rgba(52,211,153,0.1));
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 12px 20px;
+    text-align: center;
+    font-size: 14px; font-weight: 600; color: #94a3b8;
+    letter-spacing: 0.02em;
+  }
+  .footer-tagline span { color: #e2e8f0; }
+
+  .slide-num {
+    position: absolute; bottom: 14px; left: 64px;
+    font-size: 11px; color: rgba(255,255,255,0.2); letter-spacing: 0.1em;
+    z-index: 20;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="orb1"></div>
+  <div class="orb2"></div>
+
+  <div class="slide">
+    <!-- LEFT -->
+    <div class="left">
+      <div class="header-tag">🌐 CLI Telegram Controller · Deploy web</div>
+
+      <h1>Publica tu proyecto<br><span class="grad">en segundos</span></h1>
+      <p class="tagline">Cloudflare Tunnel · sin cuenta · <strong>HTTPS automático</strong></p>
+
+      <div class="modes">
+        <div class="mode">
+          <div class="mode-letter ma">A</div>
+          <div class="mode-body">
+            <h3>Sitio estático</h3>
+            <span class="mode-cmd">/server</span>
+            <p>Publica la carpeta actual como HTML/CSS/JS</p>
+          </div>
+        </div>
+        <div class="mode">
+          <div class="mode-letter mb">B</div>
+          <div class="mode-body">
+            <h3>Proxy de servicio</h3>
+            <span class="mode-cmd">/server proxy 5000</span>
+            <p>Expone localhost:5000 ya corriendo</p>
+          </div>
+        </div>
+        <div class="mode">
+          <div class="mode-letter mc">C</div>
+          <div class="mode-body">
+            <h3>Arrancar y publicar</h3>
+            <span class="mode-cmd">/server run 3000 npm run dev</span>
+            <p>Lanza el proceso y expone el puerto</p>
+          </div>
+        </div>
+        <div class="mode">
+          <div class="mode-letter md">D</div>
+          <div class="mode-body">
+            <h3>Fullstack — una sola URL</h3>
+            <span class="mode-cmd">/server fullstack 3000 5000</span>
+            <p>Front + back bajo un dominio · auto-detecta comandos de arranque</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div class="right">
+      <div class="cf-box">
+        <div class="cf-box-title">Arquitectura fullstack</div>
+
+        <div class="arch-row">
+          <div class="arch-node an-tel">📱 Telegram</div>
+          <span class="arrow">→</span>
+          <div class="arch-node an-bot">🤖 Bot Python</div>
+          <span class="arrow">→</span>
+          <div class="arch-node an-px">🔀 Proxy :8080</div>
+        </div>
+
+        <div class="sub-row">
+          <span class="sub-arrow">↓</span>
+          <div class="arch-node an-fr">⚛️ Front :3000</div>
+          <span class="sub-arrow" style="margin-left:4px">↓</span>
+          <div class="arch-node an-bk">🐍 Back :5000</div>
+        </div>
+
+        <div class="arch-row" style="margin-left:24px">
+          <div class="arch-node an-px" style="opacity:0;width:1px;padding:0">.</div>
+          <span class="arrow" style="margin-left:0">→</span>
+          <div class="arch-node an-cf">☁️ https://xyz.trycloudflare.com</div>
+        </div>
+
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+          <div style="font-size:11px;color:#64748b;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:4px 10px;">/api/* → backend</div>
+          <div style="font-size:11px;color:#64748b;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:4px 10px;">resto → frontend</div>
+          <div style="font-size:11px;color:#64748b;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:4px 10px;">sin cuenta Cloudflare</div>
+        </div>
+      </div>
+
+      <div class="stack-box">
+        <div class="stack-title">Stack técnico</div>
+        <div class="stack-chips">
+          <span class="chip">Python 3.13</span>
+          <span class="chip">python-telegram-bot 21</span>
+          <span class="chip">faster-whisper</span>
+          <span class="chip">cloudflared</span>
+          <span class="chip">pystray</span>
+          <span class="chip" style="color:#a5b4fc;border-color:rgba(99,102,241,0.3);">Claude Code CLI</span>
+          <span class="chip" style="color:#34d399;border-color:rgba(52,211,153,0.3);">Codex CLI</span>
+        </div>
+      </div>
+
+      <div class="footer-tagline">
+        <span>cli-telegram-controller</span> · Claude Code &amp; Codex · <span>listo en 5 minutos</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">2 / 2</div>
+</body>
+</html>
