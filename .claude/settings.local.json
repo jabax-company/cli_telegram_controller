@@ -14,7 +14,10 @@
       "Bash(/c/Users/Jairo/.local/bin/claude:*)",
       "Bash(env:*)",
       "WebSearch",
-      "Bash(cloudflared:*)"
-    ]
+      "Bash(cloudflared:*)",
+      "Skill(update-config)",
+      "Bash(pip install:*)"
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 03 - Características</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #07090f;
+    color: #fff;
+    position: relative;
+  }
+
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 800px 500px at 50% 120%, rgba(99,102,241,0.12) 0%, transparent 70%);
+  }
+
+  .header {
+    position: relative; z-index: 10;
+    padding: 48px 80px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .header-tag {
+    background: rgba(99,102,241,0.15);
+    border: 1px solid rgba(99,102,241,0.35);
+    border-radius: 8px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #a5b4fc;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .header h1 {
+    font-size: 36px;
+    font-weight: 900;
+    letter-spacing: -1px;
+  }
+
+  .grid {
+    position: relative; z-index: 10;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    padding: 0 80px;
+  }
+
+  .feature {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    padding: 22px 20px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s;
+  }
+  .feature::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    opacity: 0.8;
+  }
+  .f1::before { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
+  .f2::before { background: linear-gradient(90deg, #06b6d4, #0ea5e9); }
+  .f3::before { background: linear-gradient(90deg, #34d399, #10b981); }
+  .f4::before { background: linear-gradient(90deg, #f59e0b, #f97316); }
+  .f5::before { background: linear-gradient(90deg, #ec4899, #e879f9); }
+  .f6::before { background: linear-gradient(90deg, #a78bfa, #6366f1); }
+  .f7::before { background: linear-gradient(90deg, #38bdf8, #06b6d4); }
+  .f8::before { background: linear-gradient(90deg, #4ade80, #34d399); }
+
+  .feature-emoji {
+    font-size: 30px;
+    margin-bottom: 12px;
+    display: block;
+  }
+  .feature h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: #e2e8f0;
+    margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  .feature p {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.55;
+  }
+  .feature p strong { color: #94a3b8; }
+
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+  .slide-num {
+    position: absolute; bottom: 28px; left: 40px;
+    font-size: 12px; color: rgba(255,255,255,0.25); letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="header">
+    <div class="header-tag">Features</div>
+    <h1>Características principales</h1>
+  </div>
+
+  <div class="grid">
+    <div class="feature f1">
+      <span class="feature-emoji">🤖</span>
+      <h3>Claude Code CLI Streaming</h3>
+      <p>Output en tiempo real con <strong>stream-json</strong>. Contexto persistido entre prompts con <strong>--resume</strong> automático.</p>
+    </div>
+    <div class="feature f2">
+      <span class="feature-emoji">🎙️</span>
+      <h3>Voz con Whisper Local</h3>
+      <p>Transcripción con <strong>faster-whisper</strong>. Sin API externa. Soporte multiidioma con auto-fallback configurable.</p>
+    </div>
+    <div class="feature f3">
+      <span class="feature-emoji">🖼️</span>
+      <h3>Imágenes como Contexto</h3>
+      <p>Adjunta fotos a prompts. Usa <strong>&lt;image&gt;</strong> para referencias. Cola de imágenes pendientes con historial.</p>
+    </div>
+    <div class="feature f4">
+      <span class="feature-emoji">✨</span>
+      <h3>Optimizador de Prompts</h3>
+      <p>Q&amp;A interactivo que refina tu prompt antes de enviarlo: goal, paths, constraints, formato y validación.</p>
+    </div>
+    <div class="feature f5">
+      <span class="feature-emoji">🌿</span>
+      <h3>Branch Lock</h3>
+      <p>Bloquea Claude a una <strong>rama Git específica</strong>. Cambia de repo → error automático. Seguridad de código.</p>
+    </div>
+    <div class="feature f6">
+      <span class="feature-emoji">🌐</span>
+      <h3>Deploy Cloudflare Tunnel</h3>
+      <p>Estático, proxy, run o <strong>fullstack</strong>. URL pública instantánea para tu localhost sin cuenta.</p>
+    </div>
+    <div class="feature f7">
+      <span class="feature-emoji">🛡️</span>
+      <h3>Seguridad Multinivel</h3>
+      <p>Blocklist de patrones destructivos, Safe Mode, autorización por user ID y restricción de paths.</p>
+    </div>
+    <div class="feature f8">
+      <span class="feature-emoji">⏱️</span>
+      <h3>Watchdog de Inactividad</h3>
+      <p>Auto-shutdown de Claude y túneles tras inactividad configurable. Icono de bandeja Windows.</p>
+    </div>
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">03 / 08</div>
+</body>
+</html>

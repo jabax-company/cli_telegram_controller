@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 07 - Instalación</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #080a12;
+    color: #fff;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 800px 400px at 50% 110%, rgba(99,102,241,0.1) 0%, transparent 60%);
+  }
+
+  .header {
+    position: relative; z-index: 10;
+    padding: 42px 80px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .header-tag {
+    background: rgba(245,158,11,0.12);
+    border: 1px solid rgba(245,158,11,0.3);
+    border-radius: 8px; padding: 5px 14px;
+    font-size: 12px; font-weight: 600; color: #fbbf24;
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .header h1 { font-size: 34px; font-weight: 900; letter-spacing: -0.8px; }
+
+  .content {
+    position: relative; z-index: 10;
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    padding: 0 80px 50px;
+    align-items: start;
+  }
+
+  .left { display: flex; flex-direction: column; gap: 14px; }
+  .right { display: flex; flex-direction: column; gap: 14px; }
+
+  .step-card {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .step-num-badge {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800;
+    flex-shrink: 0;
+  }
+  .n1 { background: rgba(99,102,241,0.2); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.4); }
+  .n2 { background: rgba(6,182,212,0.2); color: #67e8f9; border: 1px solid rgba(6,182,212,0.4); }
+  .n3 { background: rgba(245,158,11,0.2); color: #fcd34d; border: 1px solid rgba(245,158,11,0.4); }
+  .n4 { background: rgba(52,211,153,0.2); color: #6ee7b7; border: 1px solid rgba(52,211,153,0.4); }
+  .n5 { background: rgba(236,72,153,0.2); color: #f9a8d4; border: 1px solid rgba(236,72,153,0.4); }
+  .n6 { background: rgba(139,92,246,0.2); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.4); }
+
+  .step-body h3 {
+    font-size: 14px; font-weight: 700; color: #e2e8f0; margin-bottom: 8px;
+  }
+  .code-block {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #94a3b8;
+  }
+  .code-block .prompt { color: #4ade80; }
+  .code-block .cmd { color: #e2e8f0; }
+  .code-block .comment { color: #475569; }
+  .code-block .str { color: #fcd34d; }
+  .code-block .key { color: #a5b4fc; }
+
+  .step-body p { font-size: 12px; color: #64748b; line-height: 1.5; margin-top: 8px; }
+
+  .req-bar {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 4px;
+  }
+  .req-chip {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 11.5px;
+    display: flex; align-items: center; gap: 6px;
+    color: #94a3b8;
+  }
+  .req-chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+  }
+  .dot-req { background: #ef4444; }
+  .dot-opt { background: #34d399; }
+
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+  .slide-num {
+    position: absolute; bottom: 28px; left: 40px;
+    font-size: 12px; color: rgba(255,255,255,0.25); letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="header">
+    <div class="header-tag">Install</div>
+    <h1>Instalación paso a paso</h1>
+  </div>
+
+  <div class="content">
+    <div class="left">
+
+      <!-- Requisitos -->
+      <div class="step-card">
+        <div class="step-num-badge n1">0</div>
+        <div class="step-body">
+          <h3>Requisitos previos</h3>
+          <div class="req-bar">
+            <div class="req-chip"><span class="dot dot-req"></span>Python 3.13</div>
+            <div class="req-chip"><span class="dot dot-req"></span>uv (gestor)</div>
+            <div class="req-chip"><span class="dot dot-req"></span>Claude Code CLI</div>
+            <div class="req-chip"><span class="dot dot-opt"></span>cloudflared</div>
+          </div>
+          <p>Rojo = obligatorio · Verde = opcional (para /server)</p>
+        </div>
+      </div>
+
+      <!-- Clone -->
+      <div class="step-card">
+        <div class="step-num-badge n2">1</div>
+        <div class="step-body">
+          <h3>Clonar repositorio</h3>
+          <div class="code-block">
+            <span class="prompt">PS&gt; </span><span class="cmd">git clone &lt;repo-url&gt;</span><br>
+            <span class="prompt">PS&gt; </span><span class="cmd">cd cli_telegram_controller</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Python + deps -->
+      <div class="step-card">
+        <div class="step-num-badge n3">2</div>
+        <div class="step-body">
+          <h3>Instalar Python y dependencias</h3>
+          <div class="code-block">
+            <span class="prompt">PS&gt; </span><span class="cmd">uv python install 3.13</span><br>
+            <span class="prompt">PS&gt; </span><span class="cmd">uv python pin 3.13</span><br>
+            <span class="prompt">PS&gt; </span><span class="cmd">uv sync</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="right">
+
+      <!-- .env -->
+      <div class="step-card">
+        <div class="step-num-badge n4">3</div>
+        <div class="step-body">
+          <h3>Configurar variables de entorno</h3>
+          <div class="code-block">
+            <span class="prompt">PS&gt; </span><span class="cmd">Copy-Item .env.example .env</span><br>
+            <span class="comment"># Edita .env con tus valores:</span><br>
+            <span class="key">TELEGRAM_TOKEN</span>=<span class="str">123456:ABC...</span><br>
+            <span class="key">TELEGRAM_USER_ID</span>=<span class="str">987654321</span>
+          </div>
+          <p>Obtén el token con @BotFather y tu ID con @userinfobot</p>
+        </div>
+      </div>
+
+      <!-- Auth -->
+      <div class="step-card">
+        <div class="step-num-badge n5">4</div>
+        <div class="step-body">
+          <h3>Autenticar Claude Code CLI</h3>
+          <div class="code-block">
+            <span class="prompt">PS&gt; </span><span class="cmd">claude auth login</span>
+          </div>
+          <p>Solo necesitas hacerlo una vez. Las credenciales se guardan localmente.</p>
+        </div>
+      </div>
+
+      <!-- Run -->
+      <div class="step-card">
+        <div class="step-num-badge n6">5</div>
+        <div class="step-body">
+          <h3>Lanzar el bot</h3>
+          <div class="code-block">
+            <span class="prompt">PS&gt; </span><span class="cmd">uv run python bot.py</span><br>
+            <br>
+            <span class="comment"># Verás:</span><br>
+            <span class="str">CLI Telegram Controller started.</span><br>
+            <span class="str">Authorized user: 987654321</span>
+          </div>
+          <p>¡Listo! Abre Telegram y envía <strong>/start</strong></p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">07 / 08</div>
+</body>
+</html>

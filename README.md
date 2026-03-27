@@ -1,47 +1,26 @@
-# AI Code Companion — Bot de Telegram para Claude Code y Codex
+# Claude Code Companion (local mode)
 
-Bot de Telegram que controla **Claude Code** (Anthropic) o **Codex CLI** (OpenAI) desde tu móvil. Corre completamente en local: el bot se ejecuta en tu ordenador y tú lo manejas desde Telegram en cualquier lugar.
+Bot de Telegram para controlar Claude Code en tu maquina local.
 
----
+## Tutorial desde cero
 
-## Características
+### 1) Requisitos
 
-- Ejecuta **Claude Code** o **Codex CLI** desde Telegram con texto, audio o imágenes
-- **Transcripción de audio local** con faster-whisper (sin APIs externas)
-- **Explorador de carpetas interactivo** con botones inline
-- **Proyectos guardados** para cambiar entre repos con un toque
-- **Tareas programadas** — programa prompts a una hora concreta; acumula mensajes y audios
-- **Ejecución multi-repo concurrente** — cada proyecto corre en su propio proceso
-- **Publicar webs locales** vía Cloudflare Tunnel (estático, proxy, fullstack)
-- **Bloqueo de rama Git** — Claude trabaja siempre en la rama correcta
-- **Modo seguro** — bloquea comandos destructivos (rm -rf, git reset --hard, etc.)
-- **Icono en bandeja** (Windows) con botón de parada
+- Windows + PowerShell (este README usa esos comandos)
+- Python 3.13
+- `uv` instalado
+- Claude Code CLI instalado y autenticado
+- `cloudflared` instalado (para publicar URL en internet)
+- Bot de Telegram creado con @BotFather
 
----
+### 2) Clonar y entrar al repo
 
-## Requisitos
-
-| Requisito | Instalación |
-|-----------|-------------|
-| Python 3.13 | `uv python install 3.13` |
-| uv | [https://docs.astral.sh/uv](https://docs.astral.sh/uv) |
-| Claude Code CLI | `npm install -g @anthropic-ai/claude-code` |
-| — o — Codex CLI | `npm install -g @openai/codex` |
-| Bot de Telegram | Crea uno con [@BotFather](https://t.me/BotFather) |
-| cloudflared | Solo para `/server` — [descarga](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) |
-
----
-
-## Instalación
-
-### 1. Clonar y entrar al repo
-
-```bash
-git clone https://github.com/TU_USUARIO/claude_code_bot
+```powershell
+git clone https://github.com/Jairoj88/claude_code_bot
 cd claude_code_bot
 ```
 
-### 2. Instalar dependencias
+### 3) Fijar Python y sincronizar dependencias
 
 ```powershell
 uv python install 3.13
@@ -49,33 +28,26 @@ uv python pin 3.13
 uv sync
 ```
 
-### 3. Crear el bot en Telegram
-
-1. Abre [@BotFather](https://t.me/BotFather) → `/newbot`
-2. Copia el **token** (formato `123456789:ABC-DEF...`)
-3. Abre [@userinfobot](https://t.me/userinfobot) para obtener tu **User ID** numérico
-
-### 4. Configurar `.env`
+### 4) Configurar variables de entorno
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edita `.env` y pon como mínimo:
+Edita `.env` y pon como minimo:
 
-```env
-TELEGRAM_TOKEN=tu_token_de_botfather
-TELEGRAM_USER_ID=tu_user_id_numerico
-```
+- `TELEGRAM_TOKEN`
+- `TELEGRAM_USER_ID`
 
-Para usar **Codex** en vez de Claude (opcional):
+Para audio:
 
-```env
-AI_ENGINE=codex
-CODEX_MODEL=o4-mini
-```
+- `WHISPER_MODEL` (opcional, por defecto `small`)
+- opcional: `WHISPER_DEVICE=auto`
+- opcional: `WHISPER_COMPUTE_TYPE=int8`
+- opcional: `WHISPER_PRIMARY_LANGUAGE=es` (por defecto espanol)
+- opcional: `WHISPER_ALLOW_AUTO_FALLBACK=true` (permite audios en ingles)
 
-### 5. Autenticar el CLI
+### 5) Login de Claude Code
 
 ```powershell
 # Claude Code:
@@ -85,168 +57,198 @@ claude auth login
 codex   # sigue las instrucciones en pantalla
 ```
 
-### 6. Arrancar el bot
+### 6) Ejecutar el bot
 
 ```powershell
 uv run python bot.py
 ```
 
-Verás: `Claude Code Companion (local-mode) started. Authorized user: ...`
+Si arranca bien, veras algo como:
+
+`Claude Code Companion (local-mode) started. Authorized user: ...`
 
 ---
 
-## Comandos
+## Uso rapido en Telegram
 
-### Navegación
+### Flujo base
 
-| Comando | Descripción |
-|---------|-------------|
-| `/cd` | Ir al directorio base |
-| `/cd <ruta>` | Cambiar directorio (absoluta, relativa o nombre de proyecto) |
-| `/base` | Ver directorio base |
-| `/base <ruta>` | Cambiar directorio base |
-| `/base reset` | Restaurar directorio base inicial |
-| `/paths` | Explorador de carpetas con botones |
-| `/projects` | Listar proyectos guardados |
-| `/save <nombre>` | Guardar directorio actual como proyecto |
+1. Envia `/start`
+2. Selecciona carpeta:
+   - `/paths` (navegador por botones)
+   - o `/cd C:\ruta\proyecto`
+3. Envia `/claude` para activar modo Claude
+4. Envia tu prompt por texto, audio o imagen con caption
+5. Si envias una imagen sin caption, queda en cola para tu siguiente prompt
+6. Usa `/exit` para salir de modo Claude
 
-### Ejecución con IA
+### Imagenes de referencia
 
-| Comando | Descripción |
-|---------|-------------|
-| `/claude` | Modo asistido (preguntas de optimización del prompt) |
-| `/claude <prompt>` | Ejecutar prompt directamente |
-| `/bash <cmd>` | Ejecutar comando shell en el directorio actual |
-| `/branch <nombre>` | Crear/cambiar rama Git y bloquear cambios a esa rama |
-| `/branch off` | Quitar bloqueo de rama |
-| `/exit` | Salir del modo Claude |
-| `/stop` | Interrumpir ejecución activa |
-| `/reset` | Matar proceso y borrar contexto de sesión |
+- Las imagenes se guardan en `images/` en la raiz del repo del bot.
+- Si una imagen llega con caption y estas en modo Claude, se ejecuta al instante con referencia al archivo guardado.
+- Si llega sin caption, el bot espera tu siguiente prompt y adjunta la imagen automaticamente.
+- Puedes usar `<image>` o `<images>` en el prompt para referenciar imagen(es) guardada(s).
 
-### Tareas programadas
+### Comandos importantes
 
-| Comando | Descripción |
-|---------|-------------|
-| `/at HH:MM <prompt>` | Programar tarea a una hora |
-| `/at HH:MM` | Modo acumulación — envía mensajes y audios; `/at done` para guardar |
-| `/at HH:MM DD/MM <prompt>` | Programar en fecha específica |
-| `/at HH:MM /bash <cmd>` | Programar un comando bash |
-| `/at done` | Guardar el borrador acumulado como tarea |
-| `/scheduled` | Ver tareas pendientes con sus IDs |
-| `/unschedule <id>` | Cancelar una tarea programada |
-
-**Flujo multi-repo** (cada proyecto en su propio proceso):
-
-```
-/cd ~/proyecto_A  →  /at 14:00  →  [envías mensajes/audio]  →  /at done
-/cd ~/proyecto_B  →  /at 15:30  →  [envías mensajes/audio]  →  /at done
-```
-
-### Publicar web (Cloudflare Tunnel)
-
-| Comando | Descripción |
-|---------|-------------|
-| `/server` | Publicar directorio actual como web estática |
-| `/server proxy <puerto>` | Túnel a app ya corriendo en local |
-| `/server run <puerto> <cmd>` | Arrancar app y publicarla |
-| `/server fullstack` | Auto-detectar y publicar frontend + backend |
-| `/server fullstack <fp> <bp>` | Con puertos explícitos |
-| `/server status` | Ver estado del túnel |
-| `/server stop` | Parar túnel y procesos |
-
-### Control del bot
-
-| Comando | Descripción |
-|---------|-------------|
-| `/status` | Estado completo: sesión, directorio, modo activo |
-| `/status bot` | Forzar estado del bot (aunque estés en modo Claude) |
-| `/bot stop` | Apagar el bot remotamente |
-| `/help` | Referencia completa de comandos |
-| `/start` | Bienvenida con botones de acceso rápido |
+- `/cd <ruta>` -> cambiar directorio actual
+- `/3d <ruta>` -> alias de `/cd` (util para dictado por voz)
+- `/branch <nombre>` -> crea/cambia rama y bloquea los cambios de `/claude` en esa rama
+- `/claude` -> ejecuta el prompt pendiente
+- `/claude <texto>` -> ejecuta texto directo
+- `/bot stop` -> apaga este proceso del bot de forma remota
+- `/status` -> estado de sesion, carpeta actual y prompt pendiente
+- `/stop` -> interrumpe la ejecucion actual
+- `/reset` -> limpia contexto/sesion
 
 ---
 
-## Entrada multimedia
+## Publicar web local en Cloudflare
 
-### Audio
-Envía una nota de voz o archivo de audio:
-1. Se transcribe localmente con faster-whisper
-2. El texto queda como prompt pendiente
-3. Envía `/claude` para ejecutarlo
+El codigo sigue corriendo en tu maquina local.
+Cloudflare solo expone una URL publica hacia tu localhost.
 
-En **modo acumulación** (`/at HH:MM`), los audios se añaden al borrador de la tarea programada.
+### Caso A: sitio estatico (HTML/CSS/JS)
 
-### Imágenes
-- Se guardan en `images/` en la raíz del bot
-- Sin caption: se encolan para el siguiente prompt
-- Con caption (en modo Claude): ejecutan inmediatamente con la imagen como contexto
-- Usa `<image>` en el prompt para referenciar la última imagen
+```text
+/server
+```
+
+Publica la carpeta actual como web estatica.
+
+### Caso B: backend ya corriendo en local
+
+Si tu app ya esta escuchando en un puerto local, por ejemplo `5000`:
+
+```text
+/server proxy 5000
+```
+
+### Caso C: arrancar backend desde el bot y publicarlo
+
+Ejemplo Python:
+
+```text
+/server run 5000 python app.py
+```
+
+Ejemplo Node:
+
+```text
+/server run 3000 npm run dev
+```
+
+### Caso D: frontend + backend bajo una sola URL
+
+Si tu frontend y backend corren en puertos distintos localmente:
+
+```text
+/server fullstack 3000 5000
+```
+
+Eso publica una sola URL donde:
+
+- rutas ` /api/* ` -> backend (`5000`)
+- resto de rutas -> frontend (`3000`)
+
+Si tu API usa otro prefijo:
+
+```text
+/server fullstack 3000 5000 /backend
+```
+
+Recomendado para evitar CORS y que todo funcione desde el mismo dominio Cloudflare.
+
+Si alguno de los dos puertos no esta levantado, el bot intenta arrancar frontend/backend automaticamente.
+Por defecto, intenta frontend con `npm run dev` en la raiz del repo.
+Para backend, primero intenta leer el archivo `.claude/backend_run.json` (si existe) y usar ese comando.
+Solo despues usa deteccion en scripts/entrypoints de la raiz del repo.
+Si no puede detectar el comando correcto, define comandos explicitos en `.env`:
+
+```text
+FULLSTACK_FRONT_CMD=npm run dev
+FULLSTACK_FRONT_DIR=frontend
+FULLSTACK_BACK_CMD=uv run python main.py
+FULLSTACK_BACK_DIR=backend
+```
+
+Formato recomendado para `.claude/backend_run.json`:
+
+```json
+{
+  "command": "uv run python main.py",
+  "workdir": "backend",
+  "port": 8000,
+  "api_prefix": "/api"
+}
+```
+
+### Estado y parada
+
+```text
+/server status
+/server stop
+```
+
+> `/serve` tambien funciona como alias de `/server`.
+
+---
+
+## Cambiar base directory desde Telegram
+
+Cada chat tiene su base path:
+
+- ver base actual:
+  - `/base`
+- cambiar base:
+  - `/base C:\Users\balta\proyectos`
+- resetear base al valor inicial del bot:
+  - `/base reset`
+
+Al cambiar base, el bot tambien cambia `Current dir` a esa carpeta.
+Luego `/cd`, `/3d` y `/paths` usan esa base.
+
+---
+
+## Audio a texto (local faster-whisper)
+
+Si mandas una nota de voz o audio:
+
+1. El bot la transcribe localmente con `faster-whisper`
+   (primero intenta en espanol por defecto y puede hacer fallback automatico).
+2. Guarda esa transcripcion como prompt pendiente
+3. Ejecutas con `/claude`
+
+Si falla, revisa que `faster-whisper` este instalado y tu configuracion `WHISPER_*` en `.env`.
 
 ---
 
 ## Variables de entorno
 
-### Obligatorias
+Relevantes para este flujo:
 
-| Variable | Descripción |
-|----------|-------------|
-| `TELEGRAM_TOKEN` | Token del bot de @BotFather |
-| `TELEGRAM_USER_ID` | Tu ID numérico de Telegram |
-
-### Motor de IA
-
-| Variable | Por defecto | Descripción |
-|----------|-------------|-------------|
-| `AI_ENGINE` | `claude` | `claude` o `codex` |
-| `CODEX_MODEL` | `""` | Modelo de Codex: `o4-mini`, `o3`, etc. |
-
-### Audio
-
-| Variable | Por defecto | Descripción |
-|----------|-------------|-------------|
-| `WHISPER_MODEL` | `small` | `tiny` / `base` / `small` / `medium` / `large-v3` |
-| `WHISPER_DEVICE` | `auto` | `auto`, `cpu`, `cuda` |
-| `WHISPER_COMPUTE_TYPE` | `int8` | Tipo de cómputo |
-| `WHISPER_PRIMARY_LANGUAGE` | `es` | Idioma principal |
-| `WHISPER_ALLOW_AUTO_FALLBACK` | `true` | Detección automática de idioma |
-
-### Comportamiento
-
-| Variable | Por defecto | Descripción |
-|----------|-------------|-------------|
-| `INITIAL_DIR` | raíz del bot | Directorio de trabajo inicial |
-| `SAFE_MODE` | `true` | Bloquear comandos destructivos |
-| `RESTRICT_PATHS` | `false` | Restringir IA al directorio actual |
-| `INACTIVITY_TIMEOUT_SECS` | `1800` | Segundos de inactividad antes de parar sesión |
-| `TRAY_ICON_ENABLED` | `true` | Icono en bandeja de Windows |
-
-### Servidor
-
-| Variable | Por defecto | Descripción |
-|----------|-------------|-------------|
-| `FULLSTACK_FRONT_CMD` | `""` | Comando para arrancar el frontend |
-| `FULLSTACK_FRONT_DIR` | `""` | Carpeta del frontend |
-| `FULLSTACK_BACK_CMD` | `""` | Comando para arrancar el backend |
-| `FULLSTACK_BACK_DIR` | `""` | Carpeta del backend |
-| `BLOCKED_PATTERNS` | `""` | Patrones extra a bloquear (separados por coma) |
-
----
-
-## Solución de problemas
-
-| Síntoma | Solución |
-|---------|----------|
-| El bot no arranca | Comprueba `TELEGRAM_TOKEN` y `TELEGRAM_USER_ID` en `.env` |
-| `claude` no encontrado | `claude --version`; asegúrate de que está en el PATH |
-| `codex` no encontrado | `codex --version`; `npm install -g @openai/codex` |
-| Audio falla | `uv sync` para instalar faster-whisper; `WHISPER_DEVICE=cpu` si no hay GPU |
-| `/server` no funciona | Instala `cloudflared` y añádelo al PATH |
-
----
-
-## Seguridad
-
-- Solo el usuario con `TELEGRAM_USER_ID` puede usar el bot
-- `SAFE_MODE=true` bloquea: `rm`, `del`, `Remove-Item`, `git reset --hard`, `git clean`, `dd if=`, etc.
-- Las operaciones bloqueadas piden confirmación ("YES") antes de ejecutar
-- Añade tus propios patrones con `BLOCKED_PATTERNS=patron1,patron2`
+- `TELEGRAM_TOKEN` (requerida)
+- `TELEGRAM_USER_ID` (requerida)
+- `WHISPER_MODEL` (opcional; por defecto `small`)
+- `WHISPER_DEVICE` (opcional; `auto`, `cpu` o `cuda`)
+- `WHISPER_COMPUTE_TYPE` (opcional; por defecto `int8`)
+- `WHISPER_BEAM_SIZE` (opcional; por defecto `5`)
+- `WHISPER_VAD_FILTER` (opcional; por defecto `true`)
+- `WHISPER_PRIMARY_LANGUAGE` (opcional; por defecto `es`)
+- `WHISPER_ALLOW_AUTO_FALLBACK` (opcional; por defecto `true`)
+- `INITIAL_DIR` (opcional)
+- `RESTRICT_PATHS` (opcional; restringe a `cwd` cuando el CLI lo soporte)
+- `SAFE_MODE` (opcional, por defecto `true`; bloquea comandos destructivos)
+- `INACTIVITY_TIMEOUT_SECS` (opcional, por defecto `900`; cierra Claude + server tras inactividad)
+- `INACTIVITY_CHECK_SECS` (opcional, por defecto `30`; frecuencia del watchdog de inactividad)
+- `MAX_IMAGE_HISTORY` (opcional, por defecto `50`; maximo de imagenes recordadas por chat)
+- `MAX_PENDING_IMAGES` (opcional, por defecto `10`; maximo de imagenes pendientes por usar)
+- `TRAY_ICON_ENABLED` (opcional, por defecto `true`; icono en bandeja de Windows con boton Stop)
+- `FULLSTACK_FRONT_CMD` (opcional; comando para levantar frontend en `/server fullstack`)
+- `FULLSTACK_FRONT_DIR` (opcional; carpeta del frontend)
+- `FULLSTACK_BACK_CMD` (opcional; comando para levantar backend en `/server fullstack`)
+- `FULLSTACK_BACK_DIR` (opcional; carpeta del backend)
+- `BACKEND_RUNBOOK_FILE` (opcional; archivo JSON con comando de backend)
+- `ENFORCE_BACKEND_RUNBOOK` (opcional; por defecto `true`, instruye a Claude a mantener ese archivo)
+- `BLOCKED_PATTERNS` (opcional)
+- `SERVE_PORT` (opcional, por defecto 8080 para modo estatico)

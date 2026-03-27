@@ -1,0 +1,15 @@
+My friend Jairo and I built a small tool a while back that we've been using daily, and we figured it was time to open source it.
+
+The problem: we were working on Claude Code a lot — writing prompts, reviewing output, running commands — and doing all of that tied to a laptop felt limiting. We wanted to be able to grab the phone, send a voice note, and have Claude actually do something on our machine while we were away from the desk.
+
+So we built CLI Telegram Controller. It's a Telegram bot that connects to Claude Code and Codex CLI running on your local machine. You can send text prompts, voice messages (transcribed locally with Whisper, no external APIs), or even photos as context for your code. Claude streams the output back to you in real time, keeps session continuity with --resume, and you can ask it to work on a specific Git branch — it'll lock itself to that branch and won't touch anything else.
+
+There's also a /server command that publishes your local project to a public URL via Cloudflare Tunnel in seconds — static sites, running services, or full front+backend stacks under a single domain. No Cloudflare account needed.
+
+Everything runs on your machine. Only your Telegram user ID can talk to the bot. No middle servers, no subscriptions.
+
+It's a utility, not a product. Probably rough around the edges in some places, but it's been genuinely useful for us. If it's useful for you too, great.
+
+Repo link in the comments. Stars and feedback welcome 🙂
+
+#ClaudeCode #OpenSource #Python #DeveloperTools

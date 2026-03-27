@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 05 - Comandos</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #07090e;
+    color: #fff;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 700px 500px at 50% -100px, rgba(99,102,241,0.1) 0%, transparent 60%);
+  }
+
+  .header {
+    position: relative; z-index: 10;
+    padding: 42px 80px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .header-tag {
+    background: rgba(139,92,246,0.15);
+    border: 1px solid rgba(139,92,246,0.35);
+    border-radius: 8px; padding: 5px 14px;
+    font-size: 12px; font-weight: 600; color: #c4b5fd;
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .header h1 { font-size: 34px; font-weight: 900; letter-spacing: -0.8px; }
+
+  .grid {
+    position: relative; z-index: 10;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    padding: 0 80px;
+    flex: 1;
+    align-items: start;
+  }
+
+  .cmd-group {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .cmd-group-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .cmd-group-icon { font-size: 16px; }
+  .cmd-group-header h3 {
+    font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: #94a3b8;
+  }
+
+  .cmd-list { padding: 8px 0; }
+  .cmd-row {
+    display: flex; align-items: baseline;
+    padding: 7px 18px;
+    gap: 12px;
+  }
+  .cmd-row:hover { background: rgba(255,255,255,0.02); }
+  .cmd-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 160px;
+  }
+  .cmd-desc {
+    font-size: 11.5px;
+    color: #64748b;
+    line-height: 1.35;
+  }
+
+  /* Color por grupo */
+  .g1 .cmd-name { color: #a5b4fc; }
+  .g2 .cmd-name { color: #67e8f9; }
+  .g3 .cmd-name { color: #86efac; }
+  .g4 .cmd-name { color: #fcd34d; }
+  .g5 .cmd-name { color: #f9a8d4; }
+  .g6 .cmd-name { color: #c4b5fd; }
+
+  .g1 .cmd-group-header { background: rgba(99,102,241,0.06); }
+  .g2 .cmd-group-header { background: rgba(6,182,212,0.06); }
+  .g3 .cmd-group-header { background: rgba(52,211,153,0.06); }
+  .g4 .cmd-group-header { background: rgba(245,158,11,0.06); }
+  .g5 .cmd-group-header { background: rgba(236,72,153,0.06); }
+  .g6 .cmd-group-header { background: rgba(139,92,246,0.06); }
+
+  .bottom-bar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #06b6d4, #34d399, #8b5cf6);
+  }
+  .slide-num {
+    position: absolute; bottom: 28px; left: 40px;
+    font-size: 12px; color: rgba(255,255,255,0.25); letter-spacing: 0.1em;
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="header">
+    <div class="header-tag">Commands</div>
+    <h1>Referencia de comandos</h1>
+  </div>
+
+  <div class="grid">
+
+    <!-- Claude -->
+    <div class="cmd-group g1">
+      <div class="cmd-group-header">
+        <span class="cmd-group-icon">🤖</span>
+        <h3>Claude</h3>
+      </div>
+      <div class="cmd-list">
+        <div class="cmd-row"><span class="cmd-name">/claude</span><span class="cmd-desc">Activar modo o ejecutar prompt</span></div>
+        <div class="cmd-row"><span class="cmd-name">/claude &lt;texto&gt;</span><span class="cmd-desc">Ejecutar directamente sin Q&A</span></div>
+        <div class="cmd-row"><span class="cmd-name">/plan &lt;tarea&gt;</span><span class="cmd-desc">Pedir plan sin ejecutar código</span></div>
+        <div class="cmd-row"><span class="cmd-name">/stop</span><span class="cmd-desc">Interrumpir ejecución actual</span></div>
+        <div class="cmd-row"><span class="cmd-name">/reset</span><span class="cmd-desc">Limpiar contexto y sesión</span></div>
+        <div class="cmd-row"><span class="cmd-name">/exit</span><span class="cmd-desc">Salir de modo Claude</span></div>
+      </div>
+    </div>
+
+    <!-- Navegación -->
+    <div class="cmd-group g2">
+      <div class="cmd-group-header">
+        <span class="cmd-group-icon">📁</span>
+        <h3>Navegación</h3>
+      </div>
+      <div class="cmd-list">
+        <div class="cmd-row"><span class="cmd-name">/cd &lt;ruta&gt;</span><span class="cmd-desc">Cambiar directorio actual</span></div>
+        <div class="cmd-row"><span class="cmd-name">/3d &lt;ruta&gt;</span><span class="cmd-desc">Alias de /cd (útil por voz)</span></div>
+        <div class="cmd-row"><span class="cmd-name">/base [ruta]</span><span class="cmd-desc">Ver/cambiar directorio base</span></div>
+        <div class="cmd-row"><span class="cmd-name">/mkdir &lt;nombre&gt;</span><span class="cmd-desc">Crear carpeta y entrar</span></div>
+        <div class="cmd-row"><span class="cmd-name">/paths</span><span class="cmd-desc">Navegador con botones inline</span></div>
+        <div class="cmd-row"><span class="cmd-name">/projects</span><span class="cmd-desc">Listar proyectos guardados</span></div>
+        <div class="cmd-row"><span class="cmd-name">/save &lt;nombre&gt;</span><span class="cmd-desc">Guardar directorio actual</span></div>
+      </div>
+    </div>
+
+    <!-- Servidor -->
+    <div class="cmd-group g3">
+      <div class="cmd-group-header">
+        <span class="cmd-group-icon">🌐</span>
+        <h3>Servidor / Deploy</h3>
+      </div>
+      <div class="cmd-list">
+        <div class="cmd-row"><span class="cmd-name">/server</span><span class="cmd-desc">Publicar carpeta como estático</span></div>
+        <div class="cmd-row"><span class="cmd-name">/server proxy &lt;port&gt;</span><span class="cmd-desc">Exponer servicio ya corriendo</span></div>
+        <div class="cmd-row"><span class="cmd-name">/server run &lt;p&gt; &lt;cmd&gt;</span><span class="cmd-desc">Ejecutar + publicar</span></div>
+        <div class="cmd-row"><span class="cmd-name">/server fullstack &lt;f&gt; &lt;b&gt;</span><span class="cmd-desc">Front + back bajo una URL</span></div>
+        <div class="cmd-row"><span class="cmd-name">/server status</span><span class="cmd-desc">Estado del túnel activo</span></div>
+        <div class="cmd-row"><span class="cmd-name">/server stop</span><span class="cmd-desc">Detener túnel y procesos</span></div>
+      </div>
+    </div>
+
+    <!-- Git -->
+    <div class="cmd-group g4">
+      <div class="cmd-group-header">
+        <span class="cmd-group-icon">🌿</span>
+        <h3>Git</h3>
+      </div>
+      <div class="cmd-list">
+        <div class="cmd-row"><span class="cmd-name">/branch &lt;nombre&gt;</span><span class="cmd-desc">Crear/cambiar rama + bloquear</span></div>
+        <div class="cmd-row"><span class="cmd-name">/branch off</span><span class="cmd-desc">Limpiar bloqueo de rama</span></div>
+      </div>
+    </div>
+
+    <!-- Sistema -->
+    <div class="cmd-group g5">
+      <div class="cmd-group-header">
+        <span class="cmd-group-icon">⚙️</span>
+        <h3>Sistema</h3>
+      </div>
+      <div class="cmd-list">
+        <div class="cmd-row"><span class="cmd-name">/bash &lt;cmd&gt;</span><span class="cmd-desc">Ejecutar comando shell</span></div>
+        <div class="cmd-row"><span class="cmd-name">/status</span><span class="cmd-desc">Ver estado de sesión y CWD</span></div>
+        <div class="cmd-row"><span class="cmd-name">/help</span><span class="cmd-desc">Lista completa de comandos</span></div>
+        <div class="cmd-row"><span class="cmd-name">/bot stop</span><span class="cmd-desc">Apagar el bot remotamente</span></div>
+        <div class="cmd-row"><span class="cmd-name">/start</span><span class="cmd-desc">Ver estado inicial</span></div>
+      </div>
+    </div>
+
+    <!-- Entrada multimodal -->
+    <div class="cmd-group g6">
+      <div class="cmd-group-header">
+        <span class="cmd-group-icon">🎙️</span>
+        <h3>Multimodal (sin comando)</h3>
+      </div>
+      <div class="cmd-list">
+        <div class="cmd-row"><span class="cmd-name">🎤 Nota de voz</span><span class="cmd-desc">Transcribe con Whisper local → prompt</span></div>
+        <div class="cmd-row"><span class="cmd-name">📸 Imagen sin caption</span><span class="cmd-desc">Añade a cola de imágenes pendientes</span></div>
+        <div class="cmd-row"><span class="cmd-name">📸 Imagen + caption</span><span class="cmd-desc">Ejecuta directamente en modo Claude</span></div>
+        <div class="cmd-row"><span class="cmd-name">&lt;image&gt; en prompt</span><span class="cmd-desc">Adjunta imagen del historial</span></div>
+        <div class="cmd-row"><span class="cmd-name">Texto en modo Claude</span><span class="cmd-desc">Se envía directamente a Claude</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="bottom-bar"></div>
+  <div class="slide-num">05 / 08</div>
+</body>
+</html>
