@@ -22,9 +22,18 @@ DEFAULT_BASE = ROOT_DIR
 BASE_DIR = Path(os.path.expanduser(os.environ.get("INITIAL_DIR", str(DEFAULT_BASE)))).resolve()
 INITIAL_DIR = str(BASE_DIR)
 
-# AI engine: "claude" (default) or "codex" (OpenAI Codex CLI)
+# AI engine: "claude" (default), "codex", or "claude-channel" (Remote Control)
 AI_ENGINE = os.environ.get("AI_ENGINE", "claude").strip().lower()
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()  # e.g. "o4-mini", "o3"
+
+# ── Remote Control / Channel mode ─────────────────────────────────────────────
+# Local HTTP port used by the MCP webhook channel server
+CHANNEL_PORT = int(os.environ.get("CHANNEL_PORT", "8789"))
+CHANNEL_HOST = os.environ.get("CHANNEL_HOST", "127.0.0.1")
+
+# ── Discord ────────────────────────────────────────────────────────────────────
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "").strip()
+DISCORD_USER_ID = int(os.environ.get("DISCORD_USER_ID", "0") or "0")
 
 RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
 SAFE_MODE = os.environ.get("SAFE_MODE", "true").lower() == "true"

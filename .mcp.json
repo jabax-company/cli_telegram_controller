@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "channel": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "companion.core.channel_server"],
+      "env": {
+        "CHANNEL_PORT": "8789",
+        "CHANNEL_HOST": "127.0.0.1"
+      }
+    }
+  }
+}

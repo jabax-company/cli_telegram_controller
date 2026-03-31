@@ -31,6 +31,7 @@ from companion.core.config import (
     URL_RE,
 )
 from companion.core.claude_runtime import run_task
+from companion.core.send_adapter import TelegramSendAdapter
 from companion.core.state import get_serve_state, get_state, is_serve_active
 
 logger = logging.getLogger(__name__)
@@ -1282,7 +1283,8 @@ async def cmd_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.effective_message.reply_text(
             f"Sending deployment setup prompt to Claude in {cwd}..."
         )
-        await run_task(chat_id, prompt, context, update)
+        _adapter = TelegramSendAdapter.from_context(context, chat_id)
+        await run_task(chat_id, prompt, _adapter)
         return
 
     if args[0].lower() == "help":

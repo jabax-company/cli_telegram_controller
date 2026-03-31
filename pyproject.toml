@@ -1,7 +1,7 @@
 [project]
 name = "claude-code-bot"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Control Claude Code and Codex from Telegram and Discord"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -11,6 +11,10 @@ dependencies = [
     "faster-whisper>=1.1.0,<2",
     "pystray~=0.19",
     "pillow~=10.0",
+    # Discord bot
+    "discord.py>=2.3,<3",
+    # Remote Control channel bridge
+    "aiohttp>=3.9,<4",
 ]
 
 [tool.uv]

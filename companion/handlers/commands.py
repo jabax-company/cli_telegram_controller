@@ -18,6 +18,7 @@ from companion.core.claude_runtime import (
     output_reader,
     run_task,
 )
+from companion.core.send_adapter import TelegramSendAdapter
 from companion.core.config import AI_ENGINE, BASE_DIR
 from companion.core.paths import resolve_path
 from companion.core.prompt_optimizer import clear_prompt_intake
@@ -223,7 +224,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         prompt = maybe_inject_resume_prompt(state, "/status")
         audit(chat_id, f"CLAUDE_MODE_COMMAND: {prompt}")
-        await run_task(chat_id, prompt, context, update)
+        adapter = TelegramSendAdapter.from_context(context, chat_id)
+        await run_task(chat_id, prompt, adapter)
         return
 
     engine = (state.get("ai_engine") or AI_ENGINE).upper()
@@ -545,7 +547,8 @@ async def _cmd_run_with_engine(
 
     prompt = maybe_inject_resume_prompt(state, explicit_prompt)
     audit(chat_id, f"PROMPT [{engine.upper()}]: {prompt}")
-    await run_task(chat_id, prompt, context, update)
+    adapter = TelegramSendAdapter.from_context(context, chat_id)
+    await run_task(chat_id, prompt, adapter)
 
 
 async def cmd_claude(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -611,8 +614,9 @@ async def cmd_bash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state["proc"] = proc
     state["session_active"] = True
     loop = asyncio.get_running_loop()
-    state["output_task"] = loop.create_task(output_reader(chat_id, context))
-    state["keepalive_task"] = loop.create_task(keepalive(chat_id, context))
+    _adapter = TelegramSendAdapter.from_context(context, chat_id)
+    state["output_task"] = loop.create_task(output_reader(chat_id, _adapter))
+    state["keepalive_task"] = loop.create_task(keepalive(chat_id, _adapter))
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

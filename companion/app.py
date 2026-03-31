@@ -1,14 +1,12 @@
-"""Application bootstrap."""
+"""Application bootstrap – Telegram + Discord bots, side by side."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
-import time
 
 from telegram import Update
-from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -20,6 +18,7 @@ from telegram.ext import (
 
 from companion.core.activity import inactivity_watchdog_once, stop_claude_session, track_activity_update
 from companion.core.config import (
+    DISCORD_TOKEN,
     INACTIVITY_CHECK_SECS,
     TELEGRAM_TOKEN,
     TELEGRAM_USER_ID,
@@ -98,9 +97,27 @@ async def _post_shutdown(app: Application) -> None:
             await stop_serve(chat_id)
 
 
-def main() -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+async def _run_telegram(app: Application, stop_event: asyncio.Event) -> None:
+    """Run Telegram bot polling until stop_event is set."""
+    async with app:
+        await app.start()
+        updater = app.updater
+        assert updater is not None, "Application must be built with an Updater"
+        await updater.start_polling(
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"],
+        )
+        logger.info(
+            "Telegram bot started. Authorised user: %s", TELEGRAM_USER_ID
+        )
+        await stop_event.wait()
+        await updater.stop()
+        await app.stop()
+
+
+async def _amain() -> None:
+    from companion.discord_app import run_discord_bot
+
     app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
@@ -109,20 +126,7 @@ def main() -> None:
         .build()
     )
 
-    stop_requested = False
-
-    def _external_stop(reason: str) -> None:
-        nonlocal stop_requested
-        stop_requested = True
-        logger.info("Stop requested (%s).", reason)
-        if loop.is_closed():
-            return
-        loop.call_soon_threadsafe(app.stop_running)
-
-    register_stop_callback(_external_stop)
-    tray = start_tray_icon() if TRAY_ICON_ENABLED else None
     app.add_handler(TypeHandler(Update, track_activity_update), group=-1)
-
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("bot", cmd_bot))
@@ -151,33 +155,57 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info(
-        "Claude Code Companion (local-mode) started. Authorized user: %s",
-        TELEGRAM_USER_ID,
-    )
-    network_issue_reported = False
+    stop_event = asyncio.Event()
+
+    tasks: list[asyncio.Task] = []
+
+    # Telegram task
+    tasks.append(asyncio.create_task(_run_telegram(app, stop_event), name="telegram"))
+
+    # Discord task (no-op if DISCORD_TOKEN not set)
+    if DISCORD_TOKEN:
+        tasks.append(asyncio.create_task(run_discord_bot(), name="discord"))
+
     try:
-        while not stop_requested:
-            try:
-                app.run_polling(
-                    drop_pending_updates=True,
-                    allowed_updates=["message", "callback_query"],
-                )
-                break
-            except NetworkError as exc:
-                if not network_issue_reported:
-                    logger.warning(
-                        "Telegram network error detected (%s). Retrying every %ss.",
-                        exc,
-                        POLLING_RETRY_DELAY_SECS,
-                    )
-                    network_issue_reported = True
-                else:
-                    logger.debug("Polling retry after network error: %s", exc)
-                time.sleep(POLLING_RETRY_DELAY_SECS)
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        stop_event.set()
+        # Cancel remaining tasks
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def main() -> None:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    stop_requested = False
+
+    def _external_stop(reason: str) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        logger.info("Stop requested (%s).", reason)
+        if not loop.is_closed():
+            loop.call_soon_threadsafe(loop.stop)
+
+    register_stop_callback(_external_stop)
+    tray = start_tray_icon() if TRAY_ICON_ENABLED else None
+
+    logger.info(
+        "Claude Code Companion started. Telegram user: %s%s",
+        TELEGRAM_USER_ID,
+        f" | Discord enabled" if DISCORD_TOKEN else "",
+    )
+    try:
+        loop.run_until_complete(_amain())
     except KeyboardInterrupt:
         logger.info("Ctrl+C received. Stopping bot...")
     finally:
         clear_stop_callback()
         if tray is not None:
             tray.stop()
+        loop.close()

@@ -16,7 +16,9 @@
       "WebSearch",
       "Bash(cloudflared:*)",
       "Skill(update-config)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)"
     ],
     "defaultMode": "bypassPermissions"
   }

@@ -1,4 +1,4 @@
-"""Claude process orchestration and stream handling."""
+"""Claude / Codex process orchestration and stream handling."""
 
 from __future__ import annotations
 
@@ -8,10 +8,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from telegram import Update
-from telegram.ext import ContextTypes
-
-import html
+import html as html_mod
 
 from companion.core.config import (
     AI_ENGINE,
@@ -29,6 +26,7 @@ from companion.core.config import (
     SAFE_MODE,
 )
 from companion.core.security import strip_ansi
+from companion.core.send_adapter import SendAdapter
 from companion.core.state import get_state
 from companion.core.storage import audit
 
@@ -67,39 +65,36 @@ async def _detect_path_restriction_flag() -> str | None:
     return _PATH_FLAG_CACHE
 
 
-async def send_chunk(bot, chat_id: int, text: str) -> None:
+async def send_chunk(adapter: SendAdapter, text: str) -> None:
     clean = strip_ansi(text).strip()
     if not clean:
         return
     if len(clean) > MAX_MSG:
         clean = clean[:MAX_MSG] + "\n\n(truncated)"
-    try:
-        await bot.send_message(chat_id, clean)
-    except Exception as e:
-        logger.warning("send_chunk error for chat %s: %s", chat_id, e)
+    await adapter.send_text(clean)
 
 
 async def queue_prompt_from_text(
     chat_id: int,
     text: str,
-    message,
+    reply_fn,
     source: str = "text",
 ) -> None:
+    """Save a prompt as pending and notify via reply_fn(text)."""
     state = get_state(chat_id)
     state["pending_prompt"] = text
     audit(chat_id, f"PENDING_{source.upper()}: {text}")
     preview = text if len(text) <= 400 else text[:400] + "..."
-    await message.reply_text(
+    await reply_fn(
         "Prompt saved.\n"
         "Send /claude to run it.\n\n"
         f"Saved from {source}: {preview}"
     )
 
 
-async def output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def output_reader(chat_id: int, adapter: SendAdapter) -> None:
     state = get_state(chat_id)
     proc: asyncio.subprocess.Process = state["proc"]
-    bot = context.bot
     loop = asyncio.get_running_loop()
     logger.info("output_reader[%s]: started", chat_id)
 
@@ -110,7 +105,7 @@ async def output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Non
     async def _flush() -> None:
         nonlocal text_buf, last_flush
         if text_buf.strip():
-            await send_chunk(bot, chat_id, text_buf)
+            await send_chunk(adapter, text_buf)
             text_buf = ""
         last_flush = loop.time()
 
@@ -143,10 +138,12 @@ async def output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Non
                 state["session_id"] = sid
                 logger.info("output_reader[%s]: session_id=%s", chat_id, sid)
 
+    stdout = proc.stdout
+    assert stdout is not None
     try:
         while True:
             try:
-                chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=FLUSH_INTERVAL)
+                chunk = await asyncio.wait_for(stdout.read(4096), timeout=FLUSH_INTERVAL)
             except asyncio.TimeoutError:
                 await _flush()
                 if proc.returncode is not None:
@@ -181,12 +178,12 @@ async def output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Non
         has_session = bool(state.get("session_id"))
         hint = " Next message keeps context. Use /reset for a fresh context." if has_session else ""
         try:
-            await bot.send_message(chat_id, f"Done.{hint}")
+            await adapter.send_text(f"Done.{hint}")
         except Exception:
             pass
 
 
-async def keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def keepalive(chat_id: int, adapter: SendAdapter) -> None:
     try:
         while True:
             await asyncio.sleep(KEEPALIVE_SECS)
@@ -194,16 +191,15 @@ async def keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
             if not state["session_active"]:
                 return
             try:
-                await context.bot.send_message(chat_id, "Still working...")
+                await adapter.send_text("Still working...")
             except Exception as exc:
-                # Network hiccups should not kill the keepalive task.
                 logger.debug("keepalive[%s] send failed: %s", chat_id, exc)
     except asyncio.CancelledError:
         pass
 
 
 async def spawn_claude(
-    chat_id: int, prompt: str, context: ContextTypes.DEFAULT_TYPE
+    chat_id: int, prompt: str, adapter: SendAdapter
 ) -> None:
     state = get_state(chat_id)
     cwd = str(Path(state["cwd"]).resolve())
@@ -251,12 +247,12 @@ async def spawn_claude(
     state["session_active"] = True
 
     loop = asyncio.get_running_loop()
-    state["output_task"] = loop.create_task(output_reader(chat_id, context))
-    state["keepalive_task"] = loop.create_task(keepalive(chat_id, context))
+    state["output_task"] = loop.create_task(output_reader(chat_id, adapter))
+    state["keepalive_task"] = loop.create_task(keepalive(chat_id, adapter))
 
 
 async def spawn_codex(
-    chat_id: int, prompt: str, context: ContextTypes.DEFAULT_TYPE
+    chat_id: int, prompt: str, adapter: SendAdapter
 ) -> None:
     """Spawn an OpenAI Codex CLI process."""
     state = get_state(chat_id)
@@ -285,46 +281,60 @@ async def spawn_codex(
     state["session_active"] = True
 
     loop = asyncio.get_running_loop()
-    state["output_task"] = loop.create_task(output_reader(chat_id, context))
-    state["keepalive_task"] = loop.create_task(keepalive(chat_id, context))
+    state["output_task"] = loop.create_task(output_reader(chat_id, adapter))
+    state["keepalive_task"] = loop.create_task(keepalive(chat_id, adapter))
 
 
 async def run_task(
     chat_id: int,
     prompt: str,
-    context: ContextTypes.DEFAULT_TYPE,
-    update: Update,
+    adapter: SendAdapter,
+    reply_fn=None,
+    platform: str = "unknown",
 ) -> None:
+    """Launch Claude, Codex, or the Remote Control channel for the given chat.
+
+    adapter   – SendAdapter for streaming output chunks to the user.
+    reply_fn  – optional async callable(html_text) for the initial status
+                message.  When None, adapter.send_html is used.
+    platform  – "telegram" or "discord" (for channel mode metadata).
+    """
     state = get_state(chat_id)
     cwd = str(Path(state["cwd"]).resolve())
     state["cwd"] = cwd
 
-    # Engine resolved per-chat (set via /engine), falls back to global AI_ENGINE
     engine = state.get("ai_engine") or AI_ENGINE
+
+    _notify = reply_fn if reply_fn is not None else adapter.send_html
+
+    # ── Remote Control / channel mode ──────────────────────────────────────
+    if engine == "claude-channel":
+        from companion.core.channel_runtime import run_task_channel  # noqa: PLC0415
+        await run_task_channel(chat_id, prompt, adapter, platform=platform)
+        return
+
+    # ── Subprocess mode (claude / codex) ───────────────────────────────────
     engine_label = "Codex" if engine == "codex" else "Claude Code"
-    msg = await update.effective_message.reply_text(
-        f"<b>Iniciando {engine_label}</b>\n<code>{html.escape(cwd)}</code>",
-        parse_mode="HTML",
+
+    await _notify(
+        f"<b>Iniciando {engine_label}</b>\n<code>{html_mod.escape(cwd)}</code>"
     )
     try:
         if engine == "codex":
-            await spawn_codex(chat_id, prompt, context)
+            await spawn_codex(chat_id, prompt, adapter)
         else:
-            await spawn_claude(chat_id, prompt, context)
-        await msg.edit_text(
-            f"<b>{engine_label} activo</b> en <code>{html.escape(cwd)}</code>\n"
-            "<i>/stop para interrumpir · /reset para reiniciar</i>",
-            parse_mode="HTML",
+            await spawn_claude(chat_id, prompt, adapter)
+        await _notify(
+            f"<b>{engine_label} activo</b> en <code>{html_mod.escape(cwd)}</code>\n"
+            "<i>/stop para interrumpir · /reset para reiniciar</i>"
         )
     except FileNotFoundError:
         binary = "codex" if engine == "codex" else "claude"
-        await msg.edit_text(
+        await _notify(
             f"<b>Error:</b> comando <code>{binary}</code> no encontrado.\n"
-            "Instala el CLI y asegúrate de que está en el PATH.",
-            parse_mode="HTML",
+            "Instala el CLI y asegúrate de que está en el PATH."
         )
     except Exception as e:
-        await msg.edit_text(
-            f"<b>Error al iniciar {engine_label}:</b>\n<code>{html.escape(str(e))}</code>",
-            parse_mode="HTML",
+        await _notify(
+            f"<b>Error al iniciar {engine_label}:</b>\n<code>{html_mod.escape(str(e))}</code>"
         )

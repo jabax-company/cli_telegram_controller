@@ -21,6 +21,7 @@ from companion.core.prompt_optimizer import (
     record_answer_and_advance,
 )
 from companion.core.claude_runtime import run_task
+from companion.core.send_adapter import TelegramSendAdapter
 from companion.core.config import IMAGES_DIR, MAX_IMAGE_HISTORY, MAX_PENDING_IMAGES, PROMPT_ENHANCE_ENABLED, ROOT_DIR
 from companion.core.security import blocked_match
 from companion.core.server_runtime import cmd_server
@@ -290,7 +291,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             prompt, _ = _prepare_prompt_with_images(state, prompt)
             prompt = maybe_inject_resume_prompt(state, prompt)
             audit(chat_id, f"CONFIRMED_BLOCKED: {prompt}")
-            await run_task(chat_id, prompt, context, update)
+            adapter = TelegramSendAdapter.from_context(context, chat_id)
+            await run_task(chat_id, prompt, adapter)
         else:
             state["pending_confirm"] = None
             await msg.reply_text("Cancelled.")
@@ -317,7 +319,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         prompt = await _maybe_enhance(prompt, state["cwd"], msg)
         prompt = maybe_inject_resume_prompt(state, prompt)
         audit(chat_id, f"CLAUDE_MODE: {prompt}")
-        await run_task(chat_id, prompt, context, update)
+        adapter = TelegramSendAdapter.from_context(context, chat_id)
+        await run_task(chat_id, prompt, adapter)
         return
 
     prompt_text = text
@@ -386,7 +389,8 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         prompt = await _maybe_enhance(prompt, state["cwd"], msg)
         prompt = maybe_inject_resume_prompt(state, prompt)
         audit(chat_id, f"CLAUDE_MODE_AUDIO: {prompt}")
-        await run_task(chat_id, prompt, context, update)
+        adapter = TelegramSendAdapter.from_context(context, chat_id)
+        await run_task(chat_id, prompt, adapter)
         return
 
     prompt_text = text
@@ -450,7 +454,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         prompt = await _maybe_enhance(prompt, state["cwd"], msg)
         prompt = maybe_inject_resume_prompt(state, prompt)
         audit(chat_id, f"CLAUDE_MODE_IMAGE: {prompt}")
-        await run_task(chat_id, prompt, context, update)
+        adapter = TelegramSendAdapter.from_context(context, chat_id)
+        await run_task(chat_id, prompt, adapter)
         return
 
     if state.get("prompt_intake_active"):
@@ -504,4 +509,5 @@ async def handle_command_passthrough(update: Update, context: ContextTypes.DEFAU
 
     slash_prompt = maybe_inject_resume_prompt(state, slash_prompt)
     audit(chat_id, f"CLAUDE_MODE_COMMAND: {slash_prompt}")
-    await run_task(chat_id, slash_prompt, context, update)
+    adapter = TelegramSendAdapter.from_context(context, chat_id)
+    await run_task(chat_id, slash_prompt, adapter)
