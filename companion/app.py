@@ -51,8 +51,17 @@ from companion.handlers.commands import (
 from companion.handlers.messages import (
     handle_audio,
     handle_command_passthrough,
+    handle_document,
     handle_image,
     handle_message,
+)
+from companion.handlers.system_commands import (
+    cmd_download,
+    cmd_kill,
+    cmd_lock,
+    cmd_ps,
+    cmd_screenshot,
+    cmd_sysinfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,9 +138,16 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("server", cmd_server))
     app.add_handler(CommandHandler("serve", cmd_server))
+    app.add_handler(CommandHandler("sysinfo", cmd_sysinfo))
+    app.add_handler(CommandHandler("screenshot", cmd_screenshot))
+    app.add_handler(CommandHandler("ps", cmd_ps))
+    app.add_handler(CommandHandler("kill", cmd_kill))
+    app.add_handler(CommandHandler("lock", cmd_lock))
+    app.add_handler(CommandHandler("download", cmd_download))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.COMMAND, handle_command_passthrough))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
+    app.add_handler(MessageHandler(filters.Document.ALL & ~filters.Document.IMAGE, handle_document))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

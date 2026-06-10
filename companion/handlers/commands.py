@@ -17,11 +17,11 @@ from companion.core.claude_runtime import (
     output_reader,
     run_task,
 )
-from companion.core.config import BASE_DIR
+from companion.core.config import BASE_DIR, BASH_TIMEOUT_SECS, ENABLE_BASH
 from companion.core.paths import resolve_path
 from companion.core.prompt_optimizer import clear_prompt_intake
 from companion.core.runtime_control import request_stop
-from companion.core.security import blocked_match
+from companion.core.security import blocked_match, blocked_reply_text, register_blocked_confirm
 from companion.core.state import get_state, maybe_inject_resume_prompt, reset_chat_state
 from companion.core.storage import audit, load_projects, save_projects
 
@@ -168,6 +168,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/server help - get a Claude prompt to configure auto-deployment\n"
         "/server status - show tunnel status\n"
         "/server stop - stop tunnel\n\n"
+        "Computer control\n"
+        "/sysinfo - CPU, RAM, disk, battery, uptime\n"
+        "/screenshot - capture screen and send it here\n"
+        "/ps [name] - top processes (optional name filter)\n"
+        "/kill <pid> - terminate a process (asks confirmation)\n"
+        "/lock - lock the computer screen\n"
+        "/download <path> - send a file from the computer to this chat\n"
+        "Send any document (non-image) and it is saved to <cwd>/incoming/.\n\n"
         "Bot control\n"
         "/bot stop - stop this bot process\n\n"
         "Status behavior\n"
@@ -498,12 +506,9 @@ async def cmd_claude(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     matched = blocked_match(explicit_prompt)
     if matched is not None:
-        state["pending_confirm"] = explicit_prompt
-        await update.effective_message.reply_text(
-            "Blocked pattern detected.\n"
-            f"Match: {matched}\n"
-            "Reply YES to run anyway, or anything else to cancel."
-        )
+        register_blocked_confirm(state, explicit_prompt)
+        audit(chat_id, f"BLOCKED_PROMPT: {explicit_prompt}")
+        await update.effective_message.reply_text(blocked_reply_text(matched))
         return
 
     prompt = maybe_inject_resume_prompt(state, explicit_prompt)
@@ -560,6 +565,12 @@ async def cmd_bash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text("Claude is running. Use /stop first.")
         return
 
+    if not ENABLE_BASH:
+        await update.effective_message.reply_text(
+            "/bash is disabled (ENABLE_BASH=false). Use /claude instead."
+        )
+        return
+
     if not context.args:
         await update.effective_message.reply_text("Usage: /bash <command>")
         return
@@ -567,6 +578,7 @@ async def cmd_bash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cmd_str = " ".join(context.args)
     matched = blocked_match(cmd_str)
     if matched is not None:
+        audit(chat_id, f"BLOCKED_BASH: {cmd_str}")
         await update.effective_message.reply_text(
             "Blocked pattern detected. Command not run.\n"
             f"Match: {matched}"
@@ -587,6 +599,24 @@ async def cmd_bash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     loop = asyncio.get_running_loop()
     state["output_task"] = loop.create_task(output_reader(chat_id, context))
     state["keepalive_task"] = loop.create_task(keepalive(chat_id, context))
+    loop.create_task(_bash_timeout_watchdog(proc, context, chat_id))
+
+
+async def _bash_timeout_watchdog(proc, context, chat_id: int) -> None:
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=BASH_TIMEOUT_SECS)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        audit(chat_id, f"BASH_TIMEOUT: killed after {BASH_TIMEOUT_SECS}s")
+        try:
+            await context.bot.send_message(
+                chat_id, f"/bash command killed after {BASH_TIMEOUT_SECS}s timeout."
+            )
+        except Exception:
+            pass
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

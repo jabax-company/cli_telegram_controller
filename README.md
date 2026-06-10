@@ -174,10 +174,22 @@ Una vez activado el modo Claude, cada mensaje de texto se envía directamente a 
 
 | Comando | Descripción |
 |---------|-------------|
-| `/bash <cmd>` | Ejecutar comando shell directo |
+| `/bash <cmd>` | Ejecutar comando shell directo (con timeout, desactivable) |
 | `/status` | Ver estado de sesión, carpeta y prompt pendiente |
 | `/help` | Lista completa de comandos |
 | `/bot stop` | Apagar el proceso del bot remotamente |
+
+### Control del ordenador
+
+| Comando | Descripción |
+|---------|-------------|
+| `/sysinfo` | CPU, RAM, disco, batería y uptime |
+| `/screenshot` | Captura la pantalla y la envía al chat |
+| `/ps [nombre]` | Procesos principales (filtro opcional por nombre) |
+| `/kill <pid>` | Terminar proceso (pide confirmación: `/kill <pid> yes`) |
+| `/lock` | Bloquear la pantalla del ordenador |
+| `/download <ruta>` | Enviar un archivo del ordenador al chat (máx. 50 MB) |
+| *(enviar documento)* | Cualquier documento no-imagen se guarda en `<cwd>/incoming/` |
 
 ### Publicación web (`/server` / `/serve`)
 
@@ -298,7 +310,10 @@ Si algún puerto no está levantado, el bot intenta arrancar el proceso automát
 ## Seguridad
 
 ### Autorización
-Solo el usuario cuyo ID coincide con `TELEGRAM_USER_ID` puede interactuar con el bot. Todos los handlers verifican la identidad antes de ejecutar.
+Solo el usuario cuyo ID coincide con `TELEGRAM_USER_ID` puede interactuar con el bot. Todos los handlers verifican la identidad antes de ejecutar. Los intentos no autorizados se registran en el audit log con ID y username del atacante.
+
+### Solo chats privados
+Por defecto (`PRIVATE_CHAT_ONLY=true`) el bot ignora cualquier mensaje fuera de un chat privado, para que rutas de archivos y output nunca se filtren en grupos.
 
 ### Blocklist de patrones
 Los mensajes enviados a Claude son inspeccionados antes de ejecutarse. Se bloquean:
@@ -306,7 +321,15 @@ Los mensajes enviados a Claude son inspeccionados antes de ejecutarse. Se bloque
 - `dd if=/dev/`, `mkfs`, fork bombs (`:(){ :|:& };:`)
 - `git reset --hard`, `git clean -f`
 - `curl | bash`, `wget | bash`, `python | bash`
+- Destructivos de Windows: `del /f /s /q`, `rd /s`, `format c:`, `diskpart`, `cipher /w`, `vssadmin delete`, `reg delete`
+- Lectura de credenciales: `cat ~/.ssh/id_rsa`, `cat ... credentials`
 - Patrones personalizados vía `BLOCKED_PATTERNS` en `.env`
+
+Por defecto un patrón bloqueado se **rechaza sin posibilidad de bypass**. El antiguo override "responde YES para ejecutar igualmente" solo existe si activas `ALLOW_BLOCKED_OVERRIDE=true`.
+
+### /bash endurecido
+- `ENABLE_BASH=false` desactiva el comando por completo.
+- Todo comando `/bash` se mata automáticamente tras `BASH_TIMEOUT_SECS` (300s por defecto).
 
 ### Safe Mode (`SAFE_MODE=true`, activo por defecto)
 Cuando está activado:
@@ -341,6 +364,13 @@ Cuando está activado:
 | `SAFE_MODE` | `true` | Bloquea comandos destructivos en Claude |
 | `RESTRICT_PATHS` | `false` | Claude solo puede tocar el `cwd` actual |
 | `BLOCKED_PATTERNS` | vacío | Patrones CSV extra para bloquear |
+| `ALLOW_BLOCKED_OVERRIDE` | `false` | Permite el override YES sobre patrones bloqueados |
+| `PRIVATE_CHAT_ONLY` | `true` | Ignorar mensajes fuera de chats privados |
+| `ENABLE_BASH` | `true` | Permite el comando `/bash` |
+| `BASH_TIMEOUT_SECS` | `300` | Timeout de comandos `/bash` |
+| `CLAUDE_SKIP_PERMISSIONS` | `true` | `false` usa `--permission-mode acceptEdits` en vez de skip |
+| `MAX_DOWNLOAD_MB` | `50` | Tamaño máximo de `/download` |
+| `AUDIT_MAX_BYTES` | `5242880` | Rotación del audit log |
 
 ### Audio (Whisper)
 
@@ -439,7 +469,15 @@ python-dotenv~=1.0          # Carga de .env
 anthropic~=0.40             # SDK Anthropic (uso futuro)
 faster-whisper>=1.1.0,<2    # Transcripción local de audio
 pystray~=0.19               # Icono bandeja sistema (Windows)
-Pillow~=10.0                # Generación del icono (Windows)
+Pillow~=10.0                # Generación del icono + /screenshot
+psutil~=6.0                 # /sysinfo, /ps, /kill
+```
+
+### Tests
+
+```bash
+pip install pytest
+python -m pytest tests/
 ```
 
 ---

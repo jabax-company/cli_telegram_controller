@@ -13,12 +13,14 @@ from telegram.ext import ContextTypes
 
 from companion.core.config import (
     BACKEND_RUNBOOK_APPEND_SYSTEM_PROMPT,
+    CLAUDE_SKIP_PERMISSIONS,
     DISALLOWED_BASH_TOOLS,
     ENFORCE_BACKEND_RUNBOOK,
     FLUSH_INTERVAL,
     FLUSH_SIZE,
     KEEPALIVE_SECS,
     MAX_MSG,
+    MAX_OUTPUT_CHUNKS,
     RESTRICT_PATHS,
     RUN_GUIDE_APPEND_SYSTEM_PROMPT,
     SAFE_APPEND_SYSTEM_PROMPT,
@@ -63,16 +65,34 @@ async def _detect_path_restriction_flag() -> str | None:
     return _PATH_FLAG_CACHE
 
 
+def split_message(text: str, max_len: int = MAX_MSG, max_chunks: int = MAX_OUTPUT_CHUNKS) -> list[str]:
+    """Split long output into Telegram-sized pieces, preferring newline boundaries."""
+    pieces: list[str] = []
+    remaining = text
+    while remaining and len(pieces) < max_chunks:
+        if len(remaining) <= max_len:
+            pieces.append(remaining)
+            remaining = ""
+            break
+        cut = remaining.rfind("\n", max_len // 2, max_len)
+        if cut == -1:
+            cut = max_len
+        pieces.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip("\n")
+    if remaining:
+        pieces[-1] += f"\n\n(truncated {len(remaining)} more characters)"
+    return pieces
+
+
 async def send_chunk(bot, chat_id: int, text: str) -> None:
     clean = strip_ansi(text).strip()
     if not clean:
         return
-    if len(clean) > MAX_MSG:
-        clean = clean[:MAX_MSG] + "\n\n(truncated)"
-    try:
-        await bot.send_message(chat_id, clean)
-    except Exception as e:
-        logger.warning("send_chunk error for chat %s: %s", chat_id, e)
+    for piece in split_message(clean):
+        try:
+            await bot.send_message(chat_id, piece)
+        except Exception as e:
+            logger.warning("send_chunk error for chat %s: %s", chat_id, e)
 
 
 async def queue_prompt_from_text(
@@ -176,13 +196,24 @@ async def output_reader(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def keepalive(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    status_msg = None
+    elapsed = 0
     try:
         while True:
             await asyncio.sleep(KEEPALIVE_SECS)
+            elapsed += KEEPALIVE_SECS
             state = get_state(chat_id)
             if not state["session_active"]:
                 return
-            await context.bot.send_message(chat_id, "Still working...")
+            text = f"Still working... ({elapsed // 60}m {elapsed % 60:02d}s)"
+            try:
+                if status_msg is None:
+                    status_msg = await context.bot.send_message(chat_id, text)
+                else:
+                    await status_msg.edit_text(text)
+            except Exception:
+                # Message may have been deleted or edit rejected; start a new one.
+                status_msg = None
     except asyncio.CancelledError:
         pass
 
@@ -194,9 +225,14 @@ async def spawn_claude(
     cwd = str(Path(state["cwd"]).resolve())
     state["cwd"] = cwd
 
-    cmd = [
-        "claude",
-        "--dangerously-skip-permissions",
+    cmd = ["claude"]
+    if CLAUDE_SKIP_PERMISSIONS:
+        cmd.append("--dangerously-skip-permissions")
+    else:
+        # Headless runs cannot answer permission prompts; acceptEdits allows
+        # file edits but still refuses tools outside the permission rules.
+        cmd += ["--permission-mode", "acceptEdits"]
+    cmd += [
         "-p",
         prompt,
         "--output-format",
