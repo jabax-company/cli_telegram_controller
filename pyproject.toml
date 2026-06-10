@@ -11,7 +11,16 @@ dependencies = [
     "faster-whisper>=1.1.0,<2",
     "pystray~=0.19",
     "pillow~=10.0",
+    "psutil~=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
 ]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

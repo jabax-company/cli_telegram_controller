@@ -21,7 +21,7 @@ from companion.core.prompt_optimizer import (
 )
 from companion.core.claude_runtime import run_task
 from companion.core.config import IMAGES_DIR, MAX_IMAGE_HISTORY, MAX_PENDING_IMAGES, ROOT_DIR
-from companion.core.security import blocked_match
+from companion.core.security import blocked_match, blocked_reply_text, register_blocked_confirm
 from companion.core.server_runtime import cmd_server
 from companion.core.state import get_state, maybe_inject_resume_prompt
 from companion.core.storage import audit
@@ -259,12 +259,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if state.get("claude_mode"):
         matched = blocked_match(text)
         if matched is not None:
-            state["pending_confirm"] = text
-            await msg.reply_text(
-                "Blocked pattern detected.\n"
-                f"Match: {matched}\n"
-                "Reply YES to run anyway, or anything else to cancel."
-            )
+            register_blocked_confirm(state, text)
+            audit(chat_id, f"BLOCKED_PROMPT: {text}")
+            await msg.reply_text(blocked_reply_text(matched))
             return
         prompt, _ = _prepare_prompt_with_images(state, text)
         prompt = maybe_inject_resume_prompt(state, prompt)
@@ -313,12 +310,9 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if state.get("claude_mode"):
         matched = blocked_match(text)
         if matched is not None:
-            state["pending_confirm"] = text
-            await msg.reply_text(
-                "Blocked pattern detected.\n"
-                f"Match: {matched}\n"
-                "Reply YES to run anyway, or anything else to cancel."
-            )
+            register_blocked_confirm(state, text)
+            audit(chat_id, f"BLOCKED_AUDIO: {text}")
+            await msg.reply_text(blocked_reply_text(matched))
             return
         prompt, _ = _prepare_prompt_with_images(state, text)
         prompt = maybe_inject_resume_prompt(state, prompt)
@@ -376,12 +370,9 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if state.get("claude_mode"):
         matched = blocked_match(caption)
         if matched is not None:
-            state["pending_confirm"] = caption
-            await msg.reply_text(
-                "Blocked pattern detected.\n"
-                f"Match: {matched}\n"
-                "Reply YES to run anyway, or anything else to cancel."
-            )
+            register_blocked_confirm(state, caption)
+            audit(chat_id, f"BLOCKED_IMAGE_CAPTION: {caption}")
+            await msg.reply_text(blocked_reply_text(matched))
             return
         prompt, _ = _prepare_prompt_with_images(state, caption)
         prompt = maybe_inject_resume_prompt(state, prompt)
@@ -398,6 +389,44 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Image saved: {image_entry['relative_path']}\n"
         "Caption received. Enable Claude mode with /claude and send your prompt."
     )
+
+
+def _sanitize_filename(name: str) -> str:
+    cleaned = re.sub(r"[^\w.\- ]", "_", Path(name).name).strip()
+    return cleaned or "upload.bin"
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Save a non-image document sent from the phone into <cwd>/incoming/."""
+    if not is_authorized(update):
+        return
+    msg = update.effective_message
+    if msg is None or msg.document is None:
+        return
+
+    chat_id = update.effective_chat.id
+    state = get_state(chat_id)
+
+    tg_file = await context.bot.get_file(msg.document.file_id)
+    incoming_dir = Path(state["cwd"]) / "incoming"
+    incoming_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = _sanitize_filename(msg.document.file_name or "upload.bin")
+    destination = incoming_dir / filename
+    stem, suffix = destination.stem, destination.suffix
+    counter = 1
+    while destination.exists():
+        destination = incoming_dir / f"{stem}_{counter}{suffix}"
+        counter += 1
+
+    try:
+        await tg_file.download_to_drive(custom_path=str(destination))
+    except Exception as exc:
+        await msg.reply_text(f"File save failed: {exc}")
+        return
+
+    audit(chat_id, f"FILE_RECEIVED: {destination}")
+    await msg.reply_text(f"File saved to: {destination}")
 
 
 async def handle_command_passthrough(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -430,12 +459,9 @@ async def handle_command_passthrough(update: Update, context: ContextTypes.DEFAU
 
     matched = blocked_match(slash_prompt)
     if matched is not None:
-        state["pending_confirm"] = slash_prompt
-        await msg.reply_text(
-            "Blocked pattern detected.\n"
-            f"Match: {matched}\n"
-            "Reply YES to run anyway, or anything else to cancel."
-        )
+        register_blocked_confirm(state, slash_prompt)
+        audit(chat_id, f"BLOCKED_COMMAND: {slash_prompt}")
+        await msg.reply_text(blocked_reply_text(matched))
         return
 
     slash_prompt = maybe_inject_resume_prompt(state, slash_prompt)

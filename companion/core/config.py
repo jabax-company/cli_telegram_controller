@@ -24,6 +24,16 @@ INITIAL_DIR = str(BASE_DIR)
 
 RESTRICT_PATHS = os.environ.get("RESTRICT_PATHS", "false").lower() == "true"
 SAFE_MODE = os.environ.get("SAFE_MODE", "true").lower() == "true"
+# When false (default), prompts matching the blocklist are refused outright.
+# When true, the bot offers the legacy "reply YES to run anyway" override.
+ALLOW_BLOCKED_OVERRIDE = os.environ.get("ALLOW_BLOCKED_OVERRIDE", "false").lower() == "true"
+# Only respond in private chats so output never leaks into groups/channels.
+PRIVATE_CHAT_ONLY = os.environ.get("PRIVATE_CHAT_ONLY", "true").lower() == "true"
+ENABLE_BASH = os.environ.get("ENABLE_BASH", "true").lower() == "true"
+BASH_TIMEOUT_SECS = int(os.environ.get("BASH_TIMEOUT_SECS", "300"))
+CLAUDE_SKIP_PERMISSIONS = (
+    os.environ.get("CLAUDE_SKIP_PERMISSIONS", "true").lower() == "true"
+)
 _extra_blocked = os.environ.get("BLOCKED_PATTERNS", "")
 EXTRA_BLOCKED = [p.strip() for p in _extra_blocked.split(",") if p.strip()]
 INACTIVITY_TIMEOUT_SECS = int(os.environ.get("INACTIVITY_TIMEOUT_SECS", "900"))
@@ -70,6 +80,7 @@ RUN_GUIDE_APPEND_SYSTEM_PROMPT = (
 DATA_DIR = Path.home() / ".claude_code_bot"
 PROJECTS_FILE = DATA_DIR / "projects.json"
 AUDIT_LOG = DATA_DIR / "audit.log"
+AUDIT_MAX_BYTES = int(os.environ.get("AUDIT_MAX_BYTES", str(5 * 1024 * 1024)))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -89,9 +100,11 @@ SERVE_PORT = int(os.environ.get("SERVE_PORT", "8080"))
 BROWSE_PAGE_SIZE = 8
 
 MAX_MSG = 3500
+MAX_OUTPUT_CHUNKS = 8
 KEEPALIVE_SECS = 30
 FLUSH_INTERVAL = 2.0
 FLUSH_SIZE = 500
+MAX_DOWNLOAD_MB = int(os.environ.get("MAX_DOWNLOAD_MB", "50"))
 
 DISALLOWED_BASH_TOOLS: list[str] = [
     "Bash(rm:*)",
